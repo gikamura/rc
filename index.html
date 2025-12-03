@@ -192,9 +192,11 @@
 
         @media (max-width: 480px) {
             #app { padding: 0.5rem; }
-            .grid {
-                grid-template-columns: 1fr !important;
-                gap: 0.5rem;
+            
+            /* Grid de cards mobile - 2 colunas */
+            #content-container {
+                grid-template-columns: repeat(2, 1fr) !important;
+                gap: 0.5rem !important;
             }
 
             /* Header ultra mobile */
@@ -436,6 +438,11 @@
                 -webkit-overflow-scrolling: touch;
                 scroll-behavior: smooth;
             }
+            
+            /* Cards escondidos não participam do grid */
+            #content-container > .contents > .hidden {
+                display: none !important;
+            }
 
             /* Reduzir animações para dispositivos com preferência */
             @media (prefers-reduced-motion: reduce) {
@@ -653,7 +660,7 @@
                 </div>
             </div>
             <div id="scans-content" class="hidden"></div>
-            <div id="content-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+            <div id="content-container" class="grid grid-cols-2 md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-2 md:gap-4"></div>
             <div id="pagination-controls" class="flex justify-center items-center mt-8 space-x-2"></div>
         </main>
 

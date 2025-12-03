@@ -1,5 +1,5 @@
 import { initializeStore, store, fetchAndDisplayScanWorks } from './store.js';
-import { renderApp, getDOM, showNotification, showConsolidatedUpdatePopup, loadingManager, updateFaviconBadge } from './ui.js';
+import { renderApp, getDOM, showNotification, showConsolidatedUpdatePopup, loadingManager, updateFaviconBadge, appendCardsToContainer } from './ui.js';
 import { getLastCheckTimestamp, setLastCheckTimestamp, setMangaCache, setMangaCacheVersion, getMangaCache, getMangaCacheVersion, saveScansListToCache, loadScansListFromCache, getMetadata, setMetadata, clearMangaCache } from './cache.js';
 import { SCANS_INDEX_URL, INDEX_URL, UPDATE_CHECK_INTERVAL_MS } from './constants.js';
 
@@ -726,13 +726,18 @@ async function initializeApp() {
                     dom.subtitle.textContent = payload;
                     break;
                 case 'batch-processed':
-                    // NÃO chamar setLoading aqui - causa re-render a cada batch
-                    // O suppressNotify não afeta setLoading, então remove o loader manualmente
+                    // Esconder loader na primeira batch
                     if (store.getState().isLoading) {
                         const dom = getDOM();
                         dom.mainLoader?.classList.add('hidden');
                     }
+                    
+                    // Adicionar ao store (sem notificar subscribers)
                     store.addMangaToCatalog(payload);
+                    
+                    // Renderizar cards progressivamente no DOM
+                    const { favorites } = store.getState();
+                    appendCardsToContainer(payload, favorites);
 
                     const currentCount = store.getState().allManga.length;
                     dom.subtitle.textContent = `Carregando... ${currentCount} obras`;

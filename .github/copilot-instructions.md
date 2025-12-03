@@ -2,160 +2,144 @@
 
 ## ⚠️ REGRA CRÍTICA DE DEPLOY
 
-**NUNCA fazer push para `origin` (gikamura/reader) sem autorização explícita do usuário.**
+**NUNCA fazer push para `origin` sem autorização explícita do usuário.**
 
-- `rc` → `gikamura/rc.git` - Repositório de TESTE (pode fazer push livremente)
-- `origin` → `gikamura/reader.git` - PRODUÇÃO (REQUER AUTORIZAÇÃO PRÉVIA)
+| Remote   | Repo               | Ação                              |
+|----------|--------------------|------------------------------------|
+| `rc`     | `gikamura/rc.git`  | TESTE - pode fazer push livremente |
+| `origin` | `gikamura/reader`  | PRODUÇÃO - REQUER AUTORIZAÇÃO      |
 
-Sempre usar `git push rc main` por padrão. Só usar `git push origin main` quando o usuário autorizar explicitamente.
+**Sempre usar `git push rc main` por padrão.** Ao fazer push para produção, incrementar versão em `sw.js`:
+```bash
+sed -i "s/gikamura-v[0-9]\+\.[0-9]\+/gikamura-v2.X/" sw.js
+```
 
 ---
 
 ## Visão Geral
 
-PWA de leitura de mangás/manhwas/manhuas 100% frontend. Vanilla JS (ES Modules), Tailwind CSS via CDN, **sem build step**.
+PWA de leitura de mangás 100% frontend. **Vanilla JS (ES Modules), Tailwind CSS via CDN, sem build step.**
 
-## Arquitetura de Módulos
+## Arquitetura
 
 ```
-app.js          → Ponto de entrada, inicializa Workers e Service Worker
-store.js        → Estado centralizado com padrão observer/subscriber
-ui.js           → Renderização DOM, getDOM() para queries cacheadas
-api.js          → Processamento de dados, comunicação externa
-cache.js        → localStorage + IndexedDB para persistência
-shared-utils.js → Utilitários compartilhados (compatível com Workers via importScripts)
-sw.js           → Service Worker para offline e sync periódico
-update-worker.js→ Web Worker para processamento pesado
+app.js           → Ponto de entrada, Workers, Service Worker, sistema de busca
+store.js         → Estado centralizado (observer pattern) - suppressNotify para batches
+ui.js            → Renderização DOM, getDOM() para cache de queries
+shared-utils.js  → Funções compartilhadas com Workers (usa importScripts)
+sw.js            → Service Worker (offline, cache) - ATUALIZAR VERSÃO a cada deploy
+update-worker.js → Web Worker para fetch pesado em lotes
 ```
 
 ## Fluxo de Dados
 
-1. `app.js` → `initializeStore()` → carrega cache → inicializa Workers
-2. Worker busca dados do GitHub Raw → processa em lotes de 100 → `postMessage()`
-3. Store atualiza → subscribers notificados → UI re-renderiza
+1. `app.js` → `initializeStore()` → carrega cache → cria Worker
+2. Worker busca GitHub Raw → processa em lotes de 200 → `postMessage()` por batch
+3. `store.setSuppressNotify(true)` durante batches → evita re-render a cada item
+4. Store notifica subscribers → UI renderiza uma vez no final
 
-## Comandos Essenciais
+## Comandos
 
 ```bash
-# Servir localmente
+# Servir local
 python -m http.server 8000
 
-# Deploy RC (teste)
-./scripts/deploy.sh rc  # → https://gikamura.github.io/rc/
+# Validar sintaxe (SEMPRE antes de commit)
+for f in *.js; do node --check "$f" 2>&1; done
 
-# Deploy Produção
-./scripts/deploy.sh production  # → https://gikamura.github.io/reader/
+# Deploy
+git push rc main      # Teste: https://gikamura.github.io/rc/
+git push origin main  # Prod: https://gikamura.github.io/reader/ (REQUER AUTORIZAÇÃO)
 ```
 
 ## Padrões Críticos
 
-### Web Workers - NUNCA use ES6 modules
+### Web Workers - NUNCA ES6 modules
 ```javascript
-// ❌ ERRADO - Workers não suportam ES6 modules
+// ❌ Workers não suportam import/export
 import { func } from './module.js';
 
-// ✅ CORRETO - Use importScripts
+// ✅ Use importScripts (início do worker)
 importScripts('./shared-utils.js');
 ```
 
-### Código Compartilhado
-Use `shared-utils.js` para funções que precisam rodar em Workers E contexto principal:
-- Detecta ambiente automaticamente (`typeof importScripts === 'function'`)
-- Expõe via `self.SharedUtils` para Workers
-- Expõe via `window.SharedUtils` para contexto principal
-
-### Validação de Entrada (Segurança XSS)
+### Performance com 3000+ obras
 ```javascript
-// SEMPRE use InputValidator para entrada de usuário
-import { InputValidator } from './input-validator.js';
-const validator = new InputValidator();
-const safeInput = validator.validateString(userInput);
+// ❌ sort() modifica array original do state
+state.allManga.sort((a, b) => ...);
+
+// ✅ Criar cópia OU filtrar para novo array
+const sorted = [...state.allManga].sort(...);
+// OU filtrar inline evitando criar intermediários:
+const filtered = [];
+for (let i = 0; i < state.allManga.length; i++) {
+    if (matchesFilter(state.allManga[i])) filtered.push(state.allManga[i]);
+}
 ```
 
-### Cache e Estado
-- **NUNCA** acesse `localStorage` dentro de Workers - gerenciar em `app.js`
-- Use `CacheCoordinator` para cache unificado entre contextos
-- Cache tem duração de 6 horas (configurável em `constants.js`)
+### Batch Loading Pattern
+```javascript
+// app.js - evitar re-render durante carregamento
+store.setSuppressNotify(true);
+// ... processar muitos itens ...
+store.setSuppressNotify(false);
+renderApp(); // Uma renderização no final
+```
+
+### getDOM() - Cache de Queries
+```javascript
+// ❌ querySelector repetido
+document.getElementById('search-input').value;
+document.getElementById('search-input').focus();
+
+// ✅ Use getDOM() uma vez
+const dom = getDOM();
+dom.searchInput.value;
+dom.searchInput.focus();
+```
+
+### Validação XSS
+```javascript
+import { InputValidator } from './input-validator.js';
+const validator = new InputValidator();
+const safe = validator.validateString(userInput); // Sanitiza HTML
+```
+
+## Service Worker
+
+**SEMPRE incrementar versão ao fazer deploy:**
+```javascript
+// sw.js linha 2
+const CACHE_VERSION = 'gikamura-v2.2'; // ← Incrementar aqui
+```
+
+Estratégias de cache:
+- `cacheFirst`: Assets estáticos (JS, icons)
+- `networkFirst`: API calls (raw.githubusercontent.com)
+- `staleWhileRevalidate`: Outros recursos
 
 ## Debugging
 
 ```javascript
-// Ativar debug global
-window.toggleGikamuraDebug()  // Alterna on/off
-window.GIKAMURA_DEBUG         // Estado atual
-
-// Persistente
-localStorage.setItem('gikamura_debug', 'true')
+window.toggleGikamuraDebug()  // Ativa logs detalhados
+localStorage.setItem('gikamura_debug', 'true') // Persistente
 ```
 
-### Problemas Comuns
-- **Cards não renderizam**: Verificar `update-worker.js` messages no console, Network tab para GitHub Raw
-- **Service Worker**: Application tab → Service Workers para status/logs
-- **Cache corrompido**: `localStorage.clear()` + Ctrl+Shift+R
-
-## Sistema de Notificações
-
-### Detecção de Atualizações
-- Usa `metadata.lastUpdated` do index para detectar mudanças (requisição leve)
-- Compara `chapter.last_updated` (timestamp Unix em segundos) com `lastCheckTimestamp` local
-- Verificação periódica a cada 5 minutos (`UPDATE_CHECK_INTERVAL_MS`)
-- Pausa quando aba não está visível (economia de recursos)
-
-### Funcionalidades
-- **Badge no favicon**: Mostra número de atualizações não lidas
-- **Som de notificação**: Opcional, usa Web Audio API (dois tons)
-- **Popup de atualização**: Botão flutuante quando há novidades
-- **Aba Updates**: Histórico separado por tipo (novas obras / novos capítulos)
-
-### Configurações (em `settings`)
-```javascript
-{
-  notificationsEnabled: true,  // Verificar atualizações
-  popupsEnabled: true,         // Mostrar popups
-  soundEnabled: false          // Som de notificação
-}
-```
+**Problemas Comuns:**
+- Cards vazios → Network tab: verificar GitHub Raw responses
+- SW desatualizado → DevTools > Application > Service Workers > Update
+- Cache corrompido → `localStorage.clear()` + hard refresh
 
 ## Dados Externos
 
-- **Source**: `raw.githubusercontent.com` (sem CORS blocking)
-- **Index URL**: `INDEX_URL` em `constants.js`
-- **Formato**: Processa URLs Cubari.moe → JSON do GitHub
+Source: `raw.githubusercontent.com` (sem CORS)
 
-### Estruturas de JSON
-
-**Index Principal** (`metadata` + `mangas`):
+**Index Principal** (`constants.js → INDEX_URL`):
 ```json
 {
-  "metadata": { "version": "1.0.4", "lastUpdated": 1759256696, "totalMangas": 1085 },
-  "mangas": { "KR1017": { "title": "...", "chapters": [{ "type": "manhwa", ... }] } }
+  "metadata": { "lastUpdated": 1759256696, "totalMangas": 1085 },
+  "mangas": { "KR1017": { "title": "...", "type": "manhwa" } }
 }
 ```
 
-**Index de Scans** (`scan_info` + `works`):
-```json
-{
-  "scan_info": { "name": "...", "version": "1.0.0", "total_works": 536 },
-  "works": { "vajp_f11442": { "chapters": [{ "type": "manga", ... }] } }
-}
-```
-
-**Detalhes da Obra** (API Cubari):
-```json
-{
-  "title": "...", "status": "OnGoing",
-  "chapters": { "203": { "last_updated": "1758931338", ... } }
-}
-```
-
-## Testes e CI
-
-```bash
-# Validar sintaxe JS
-find . -name "*.js" -not -path "./node_modules/*" | xargs -I {} node -c "{}"
-
-# Validar manifest
-node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8'))"
-```
-
-CI/CD via GitHub Actions: `.github/workflows/ci.yml` e `.github/workflows/deploy.yml`
+**Tipos de obra**: `manga` (JP), `manhwa` (KR), `manhua` (CH) - inferido do prefixo da chave ou campo `type`
