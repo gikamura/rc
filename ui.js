@@ -449,7 +449,7 @@ export const createCardHTML = (data, isFavorite) => {
     return `
     <div class="contents">
         <!-- MOBILE -->
-        <div class="block md:hidden relative bg-[#1a1a1a] rounded-lg shadow-lg overflow-hidden">
+        <div class="card-mobile block md:hidden relative bg-[#1a1a1a] rounded-lg shadow-lg overflow-hidden">
             <a href="${data.url}" target="_blank" rel="noopener noreferrer" class="block">
                 <div class="aspect-[2/3] relative">
                     <img src="${data.imageUrl}" alt="${escapedTitle}" class="w-full h-full object-cover" loading="lazy" onerror="handleImageError(this, '${data.imageUrl.replace(/'/g, "\\'")}')">
@@ -469,7 +469,7 @@ export const createCardHTML = (data, isFavorite) => {
             </button>
         </div>
         <!-- DESKTOP (ORIGINAL EXATO) -->
-        <div class="hidden md:block relative bg-[#1a1a1a] rounded-lg shadow-lg overflow-hidden transition-transform transform hover:-translate-y-1 hover:shadow-2xl group" style="height: 16rem;">
+        <div class="card-desktop hidden md:block relative bg-[#1a1a1a] rounded-lg shadow-lg overflow-hidden transition-transform transform hover:-translate-y-1 hover:shadow-2xl group" style="height: 16rem;">
             <a href="${data.url}" target="_blank" rel="noopener noreferrer" class="relative flex flex-grow w-full h-full">
                 <div class="w-1/3 flex-shrink-0 bg-[#050505]">
                     <img src="${data.imageUrl}" alt="Capa de ${escapedTitle}" class="w-full h-full object-cover" loading="lazy" onerror="handleImageError(this, '${data.imageUrl.replace(/'/g, "\\'")}')">

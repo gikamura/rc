@@ -100,7 +100,16 @@
 
         @media (max-width: 768px) {
             #app { padding: 0.75rem; }
-            .grid { grid-template-columns: repeat(2, 1fr) !important; gap: 0.75rem; }
+            
+            /* Grid de cards - 2 colunas no mobile */
+            #content-container { 
+                grid-template-columns: repeat(2, 1fr) !important; 
+                gap: 0.5rem !important; 
+            }
+            
+            /* CRÍTICO: Esconder card desktop, mostrar card mobile */
+            #content-container .card-mobile { display: block !important; }
+            #content-container .card-desktop { display: none !important; }
 
             /* Header mobile */
             header h1 { font-size: 2rem; }
