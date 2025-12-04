@@ -3,7 +3,7 @@ name: Deploy to GitHub Pages (rc)
 on:
   push:
     branches:
-      - rc
+      - main
 
 jobs:
   deploy:
