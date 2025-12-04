@@ -24,3 +24,5 @@ Thumbs.db
 # Temporários
 tmp/
 temp/
+scripts/
+.github
