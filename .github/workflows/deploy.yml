@@ -1,0 +1,31 @@
+name: Deploy to GitHub Pages (rc)
+
+on:
+  push:
+    branches:
+      - rc
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout rc branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: rc
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload static site
+        uses: actions/upload-pages-artifact@v2
+        with:
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v3
+
+      - name: Print deployment URL
+        run: echo "Site publicado em ${{ steps.deployment.outputs.page_url }}"

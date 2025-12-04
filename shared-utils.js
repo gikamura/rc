@@ -162,6 +162,9 @@ const processMangaUrl = async (chapterUrl, preFetchedData = {}) => {
 
         let decodedPath = b64DecodeUnicode(b64);
 
+        // FIX: Remove a parte incorreta do caminho para URLs de scans
+        decodedPath = decodedPath.replace('/refs/heads/', '/');
+
         // FIX: Decodifica completamente o caminho para evitar dupla codificação
         try {
             decodedPath = decodeURIComponent(decodedPath);

@@ -12,7 +12,8 @@
 import { ITEMS_PER_PAGE, INDEX_URL } from './constants.js';
 
 // Configuração da janela deslizante
-const WINDOW_SIZE = 5; // Páginas antes e depois da atual
+const WINDOW_SIZE = 5; // Janela padrão para modo "todos"
+const FILTERED_WINDOW_SIZE = 2; // Janela para modos de filtro
 
 /**
  * Fetch com timeout (não depende de SharedUtils)
@@ -38,8 +39,12 @@ async function fetchWithTimeout(url, options = {}) {
 let state = {
     // Light Index: {id, title, type, cover_url} para todas as obras
     lightIndex: [],
+    // Índice filtrado (uma lista de objetos do lightIndex)
+    filteredIndex: null,
     // Mapa de páginas carregadas: pageNumber -> [manga completos]
     loadedPages: new Map(),
+    // Piscina de objetos canônicos para evitar cópias
+    mangaObjectPool: new Map(),
     // Metadata do índice
     metadata: {
         totalMangas: 0,
@@ -57,16 +62,80 @@ let state = {
 };
 
 /**
- * Calcula o total de páginas baseado no metadata
+ * Retorna o índice ativo (filtrado ou completo)
+ */
+function getActiveIndex() {
+    return state.filteredIndex !== null ? state.filteredIndex : state.lightIndex;
+}
+
+/**
+ * Aplica filtros ao índice, criando um índice virtual.
+ */
+export function applyFilters(filters = {}) {
+    const { type, status, query } = filters;
+    
+    if (type === 'all' && status === 'all' && !(query && query.trim())) {
+        state.filteredIndex = null;
+    } else {
+        // Reutilizar a função de busca principal que agora suporta todos os filtros
+        // e tem a lógica de ordenação por relevância correta.
+        state.filteredIndex = search(query, { type, status });
+    }
+    
+    // Limpar páginas carregadas e voltar para a primeira página
+    state.loadedPages.clear();
+    state.currentPage = 1;
+    
+    console.log(`🔎 Filtros aplicados. ${getActiveIndex().length} obras no índice ativo.`);
+}
+
+/**
+ * Retorna os objetos canônicos das obras a partir de seus IDs.
+ * Cria e armazena os objetos na piscina se eles não existirem.
+ * @param {Array<string>} ids - Uma lista de IDs de obras.
+ * @returns {Array<object>} Uma lista dos objetos de obras canônicos.
+ */
+export function getMangaObjectsByIds(ids) {
+    if (!ids) return [];
+
+    const results = [];
+    for (const id of ids) {
+        if (state.mangaObjectPool.has(id)) {
+            results.push(state.mangaObjectPool.get(id));
+        } else {
+            // Se não está na piscina, encontrar no lightIndex e criar
+            const lightItem = state.lightIndex.find(item => item.id === id);
+            if (lightItem) {
+                const newMangaObject = {
+                    ...lightItem,
+                    imageUrl: lightItem.cover_url || '',
+                    status: lightItem.status || 'unknown',
+                    author: 'N/A',
+                    artist: 'N/A',
+                    description: 'Carregando detalhes...',
+                    chapterCount: 0,
+                    chapters: {}
+                };
+                state.mangaObjectPool.set(id, newMangaObject);
+                results.push(newMangaObject);
+            }
+        }
+    }
+    return results;
+}
+
+/**
+ * Calcula o total de páginas baseado no índice ativo
  */
 export function getTotalPages() {
-    return Math.ceil(state.metadata.totalMangas / ITEMS_PER_PAGE);
+    return Math.ceil(getActiveIndex().length / ITEMS_PER_PAGE);
 }
 
 /**
  * Retorna o metadata do índice
  */
 export function getMetadata() {
+    // Retorna o total de mangas do índice completo, não do filtrado
     return { ...state.metadata };
 }
 
@@ -110,9 +179,10 @@ export function getAllLoadedManga() {
 function getWindowPages(currentPage) {
     const totalPages = getTotalPages();
     const pages = new Set();
-    
+    const currentWindowSize = state.filteredIndex !== null ? FILTERED_WINDOW_SIZE : WINDOW_SIZE;
+
     // Adicionar páginas na janela: [current - WINDOW_SIZE, current + WINDOW_SIZE]
-    for (let i = currentPage - WINDOW_SIZE; i <= currentPage + WINDOW_SIZE; i++) {
+    for (let i = currentPage - currentWindowSize; i <= currentPage + currentWindowSize; i++) {
         if (i >= 1 && i <= totalPages) {
             pages.add(i);
         }
@@ -136,6 +206,7 @@ function pruneOutOfWindowPages(currentPage) {
     
     for (const page of pagesToRemove) {
         state.loadedPages.delete(page);
+        // Não apagar da piscina de objetos, pois eles são canônicos
         console.log(`🗑️ Página ${page} removida da memória (fora da janela)`);
     }
     
@@ -153,7 +224,7 @@ function indexEntryToLight(key, entry) {
         type: chapter.type || inferTypeFromKey(key),
         cover_url: chapter.cover_url || '',
         url: chapter.url || '',
-        status: entry.status || 'unknown' // Status agora vem do índice
+        status: normalizeStatus(chapter.status || entry.status || 'unknown') // CORRECTED
     };
 }
 
@@ -168,6 +239,19 @@ function inferTypeFromKey(key) {
     if (key.startsWith('maot_')) return 'outro';
     return 'manga';
 }
+
+/**
+ * Normaliza o status para valores esperados pelos filtros
+ */
+const normalizeStatus = (rawStatus) => {
+    if (!rawStatus) return 'unknown';
+    const s = rawStatus.toLowerCase().trim();
+    if (s.includes('andamento') || s.includes('ongoing') || s === 'releasing') return 'ongoing';
+    if (s.includes('complet') || s.includes('finished')) return 'completed';
+    if (s.includes('pausa') || s.includes('hiatus') || s.includes('dropped')) return 'hiatus';
+    if (s.includes('cancel')) return 'hiatus';
+    return 'unknown';
+};
 
 /**
  * Converte entrada do índice para formato completo (para cards)
@@ -204,32 +288,26 @@ async function loadPageData(pageNumber) {
         return state.loadedPages.get(pageNumber);
     }
     
+    const activeIndex = getActiveIndex();
     const startIndex = (pageNumber - 1) * ITEMS_PER_PAGE;
-    const endIndex = Math.min(startIndex + ITEMS_PER_PAGE, state.lightIndex.length);
+    const endIndex = Math.min(startIndex + ITEMS_PER_PAGE, activeIndex.length);
     
-    if (startIndex >= state.lightIndex.length) {
+    if (startIndex >= activeIndex.length) {
         return [];
     }
     
-    const pageItems = state.lightIndex.slice(startIndex, endIndex);
+    const pageItemIds = activeIndex.slice(startIndex, endIndex).map(item => item.id);
     
-    // Converter para formato completo (com dados para renderização)
-    // Importante: adicionar imageUrl pois createCardHTML espera esse campo
-    const fullItems = pageItems.map(light => ({
-        ...light,
-        imageUrl: light.cover_url || '', // createCardHTML usa imageUrl
-        status: 'unknown', // Pode ser atualizado depois via fetch
-        chapters: {},
-        chapterCount: 0,
-        author: 'N/A',
-        artist: 'N/A',
-        description: 'Carregando detalhes...'
-    }));
+    // Usar a piscina de objetos canônicos
+    const pageItems = getMangaObjectsByIds(pageItemIds);
     
-    state.loadedPages.set(pageNumber, fullItems);
-    console.log(`📖 Página ${pageNumber} carregada: ${fullItems.length} obras`);
+    state.loadedPages.set(pageNumber, pageItems);
+    console.log(`📖 Página ${pageNumber} carregada: ${pageItems.length} obras`);
     
-    return fullItems;
+    // Agendar busca de detalhes para a página recém-carregada
+    scheduleDetailsForItems(pageItems);
+
+    return pageItems;
 }
 
 /**
@@ -268,8 +346,14 @@ export async function goToPage(pageNumber) {
     const totalPages = getTotalPages();
     
     if (pageNumber < 1 || pageNumber > totalPages) {
-        console.warn(`Página ${pageNumber} fora do range [1, ${totalPages}]`);
-        return false;
+        // Se a página está fora do alcance, mas é a página 1 (comum após filtrar), não logar warning
+        if (pageNumber === 1 && totalPages === 0) {
+            // Limpar a página atual se não há resultados
+            state.loadedPages.set(1, []);
+        } else {
+            console.warn(`Página ${pageNumber} fora do range [1, ${totalPages}]`);
+            return false;
+        }
     }
     
     state.currentPage = pageNumber;
@@ -377,6 +461,11 @@ export function search(query, filters = {}) {
         results = results.filter(m => m.type === filters.type);
     }
     
+    // Aplicar filtro de status
+    if (filters.status && filters.status !== 'all') {
+        results = results.filter(m => m.status === filters.status);
+    }
+    
     // Aplicar busca por texto
     if (query && query.trim()) {
         const searchTerm = query.toLowerCase().trim();
@@ -407,7 +496,8 @@ export function search(query, filters = {}) {
  * @returns {number} Número da página (1-indexed) ou -1 se não encontrado
  */
 export function findMangaPage(mangaId) {
-    const index = state.lightIndex.findIndex(m => m.id === mangaId);
+    const activeIndex = getActiveIndex();
+    const index = activeIndex.findIndex(m => m.id === mangaId);
     if (index === -1) return -1;
     return Math.floor(index / ITEMS_PER_PAGE) + 1;
 }
@@ -417,7 +507,9 @@ export function findMangaPage(mangaId) {
  */
 export function reset() {
     state.lightIndex = [];
+    state.filteredIndex = null;
     state.loadedPages.clear();
+    state.mangaObjectPool.clear();
     state.metadata = { totalMangas: 0, lastUpdated: 0, version: '' };
     state.currentPage = 1;
     state.initialized = false;
@@ -443,11 +535,12 @@ export function getMemoryStats() {
     
     return {
         lightIndexSize: state.lightIndex.length,
+        filteredIndexSize: state.filteredIndex?.length,
         loadedPages: state.loadedPages.size,
         loadedMangaCount: loadedCount,
         totalPages: getTotalPages(),
         currentPage: state.currentPage,
-        windowSize: WINDOW_SIZE * 2 + 1
+        windowSize: state.filteredIndex !== null ? (FILTERED_WINDOW_SIZE * 2 + 1) : (WINDOW_SIZE * 2 + 1),
     };
 }
 
@@ -511,17 +604,6 @@ async function fetchMangaDetails(manga) {
         }
         
         const data = await response.json();
-        
-        // Normalizar status para valores esperados pelos filtros
-        const normalizeStatus = (rawStatus) => {
-            if (!rawStatus) return 'unknown';
-            const s = rawStatus.toLowerCase().trim();
-            if (s.includes('andamento') || s.includes('ongoing') || s === 'releasing') return 'ongoing';
-            if (s.includes('complet') || s === 'finished') return 'completed';
-            if (s.includes('pausa') || s.includes('hiatus') || s.includes('dropped')) return 'hiatus';
-            if (s.includes('cancel')) return 'hiatus';
-            return 'unknown';
-        };
         
         // Extrair detalhes
         const details = {
@@ -622,6 +704,28 @@ export function scheduleDetailsForLoadedPages() {
     for (const pageNumber of state.loadedPages.keys()) {
         scheduleDetailsForPage(pageNumber);
     }
+}
+
+/**
+ * Agenda busca de detalhes para uma lista arbitrária de obras (ex: resultados de busca)
+ * @param {Array} items - Lista de obras
+ */
+export function scheduleDetailsForItems(items) {
+    if (!items || items.length === 0) return;
+
+    // Adicionar obras que ainda não têm detalhes
+    for (const manga of items) {
+        const cacheKey = manga.url || manga.id;
+        // Só adicionar se não está no cache e precisa de detalhes
+        if (!detailsCache.has(cacheKey) && (manga.author === 'N/A' || manga.description === 'Carregando detalhes...')) {
+            if (!detailsQueue.find(itemInQueue => itemInQueue.id === manga.id)) {
+                detailsQueue.push(manga);
+            }
+        }
+    }
+
+    // Iniciar processamento se não está rodando
+    processDetailsQueue();
 }
 
 /**
