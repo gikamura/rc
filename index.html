@@ -23,6 +23,14 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
     
     <style>
+        /* MOBILE/DESKTOP CARD VISIBILITY - CSS PURO (não depende do Tailwind) */
+        .card-mobile { display: block; }
+        .card-desktop { display: none; }
+        @media (min-width: 768px) {
+            .card-mobile { display: none !important; }
+            .card-desktop { display: block !important; }
+        }
+        
         :root { font-family: 'Inter', sans-serif; }
         html { scroll-behavior: smooth; }
         .loader {
@@ -106,10 +114,6 @@
                 grid-template-columns: repeat(2, 1fr) !important; 
                 gap: 0.5rem !important; 
             }
-            
-            /* CRÍTICO: Esconder card desktop, mostrar card mobile */
-            #content-container .card-mobile { display: block !important; }
-            #content-container .card-desktop { display: none !important; }
 
             /* Header mobile */
             header h1 { font-size: 2rem; }
