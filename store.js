@@ -106,6 +106,20 @@ export const store = {
     setLoading: (isLoading) => { state.isLoading = isLoading; notify(); },
     setError: (errorMessage) => { state.error = errorMessage; notify(); },
 
+    // LAZY LOADING: Light index e metadata do catálogo
+    setLightIndex: (lightIndexArray) => {
+        state.lightIndex = lightIndexArray;
+        notify();
+    },
+    setCatalogMetadata: (metadata) => {
+        state.catalogMetadata = { ...state.catalogMetadata, ...metadata };
+        notify();
+    },
+    setPageLoading: (isLoading) => {
+        state.isPageLoading = isLoading;
+        notify();
+    },
+
     // NOVAS FUNÇÕES PARA O ESTADO DE SCANS
     setScansList: (scansArray) => {
         state.scansList = scansArray;

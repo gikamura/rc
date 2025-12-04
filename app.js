@@ -1,7 +1,7 @@
 import { initializeStore, store, fetchAndDisplayScanWorks } from './store.js';
-import { renderApp, getDOM, showNotification, showConsolidatedUpdatePopup, loadingManager, updateFaviconBadge, appendCardsToContainer } from './ui.js';
-import { getLastCheckTimestamp, setLastCheckTimestamp, setMangaCache, setMangaCacheVersion, getMangaCache, getMangaCacheVersion, saveScansListToCache, loadScansListFromCache, getMetadata, setMetadata, clearMangaCache } from './cache.js';
-import { SCANS_INDEX_URL, INDEX_URL, UPDATE_CHECK_INTERVAL_MS } from './constants.js';
+import { renderApp, getDOM, showNotification, showConsolidatedUpdatePopup, loadingManager, updateFaviconBadge, appendCardsToContainer, generateSkeletonCards } from './ui.js';
+import { getLastCheckTimestamp, setLastCheckTimestamp, setMangaCache, setMangaCacheVersion, getMangaCache, getMangaCacheVersion, saveScansListToCache, loadScansListFromCache, getMetadata, setMetadata, clearMangaCache, saveLightIndexToCache, loadLightIndexFromCache } from './cache.js';
+import { SCANS_INDEX_URL, INDEX_URL, UPDATE_CHECK_INTERVAL_MS, ITEMS_PER_PAGE } from './constants.js';
 
 import { SmartDebounce, SmartAutocomplete } from './smart-debounce.js';
 import { searchEngine, keyboardShortcuts, parseQueryFilters } from './search-engine.js';
@@ -9,10 +9,26 @@ import { errorNotificationManager } from './error-handler.js';
 import { GestureNavigationManager } from './touch-gestures.js';
 import { analytics } from './local-analytics.js';
 
+// Lazy Loading PageManager
+import * as PageManager from './page-manager.js';
+
 import './shared-utils.js';
 
 // Sistema global de debug
 window.GIKAMURA_DEBUG = localStorage.getItem('gikamura_debug') === 'true';
+
+// Feature flag para lazy loading (ativar gradualmente)
+// LAZY_LOADING_ENABLED: true = usa PageManager com sliding window
+// LAZY_LOADING_ENABLED: false = comportamento anterior (carrega tudo)
+const LAZY_LOADING_ENABLED = localStorage.getItem('gikamura_lazy_loading') !== 'false'; // Default: true
+
+// Helper para alternar lazy loading
+window.toggleLazyLoading = () => {
+    const current = localStorage.getItem('gikamura_lazy_loading') !== 'false';
+    localStorage.setItem('gikamura_lazy_loading', (!current).toString());
+    console.log(`Lazy loading ${!current ? 'ativado' : 'desativado'}. Recarregue a página.`);
+    return !current;
+};
 
 // Intervalo de verificação periódica
 let updateCheckInterval = null;
@@ -394,9 +410,17 @@ function setupEventListeners() {
     // Sistema de busca será configurado após carregamento dos dados
     // Nota: removido o event listener direto para evitar conflitos
 
-    dom.paginationControls.addEventListener('click', (e) => {
+    dom.paginationControls.addEventListener('click', async (e) => {
         if (e.target.matches('.pagination-btn')) {
-            store.setCurrentPage(parseInt(e.target.dataset.page, 10));
+            const page = parseInt(e.target.dataset.page, 10);
+            
+            // Se lazy loading está habilitado, usar handleLazyPageChange
+            if (LAZY_LOADING_ENABLED && PageManager.getLightIndex().length > 0) {
+                await handleLazyPageChange(page);
+            } else {
+                store.setCurrentPage(page);
+            }
+            
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
     });
@@ -608,6 +632,280 @@ async function fetchScansIndex() {
     }
 }
 
+// ============================================
+// LAZY LOADING - Sistema de Paginação Sob Demanda
+// ============================================
+
+/**
+ * Inicializa o app usando lazy loading com PageManager
+ * - Carrega light index (~200KB) para busca
+ * - Carrega apenas página atual + janela de ±5 páginas
+ * - Remove páginas fora da janela da memória
+ */
+async function initializeAppWithLazyLoading(dom) {
+    debugLog('Iniciando com LAZY LOADING habilitado');
+    console.log('📖 Modo Lazy Loading ativado');
+    
+    // Mostrar skeleton cards enquanto carrega
+    const grid = document.getElementById('manga-grid');
+    if (grid) {
+        grid.innerHTML = generateSkeletonCards(ITEMS_PER_PAGE);
+    }
+    
+    try {
+        // Tentar carregar light index do cache
+        const cachedIndex = await loadLightIndexFromCache();
+        
+        // Inicializar PageManager
+        const metadata = await PageManager.initialize({
+            cachedLightIndex: cachedIndex?.data || null,
+            cachedMetadata: cachedIndex?.metadata || null,
+            onLoadingStart: () => {
+                store.setPageLoading(true);
+                debugLog('PageManager: loading start');
+            },
+            onLoadingEnd: () => {
+                store.setPageLoading(false);
+                debugLog('PageManager: loading end');
+            },
+            onPageLoaded: (pageNumber, pageData) => {
+                debugLog('PageManager: página carregada', { pageNumber, itemCount: pageData.length });
+            }
+        });
+        
+        // Salvar light index no cache se veio do servidor
+        if (!cachedIndex) {
+            const lightIndex = PageManager.getLightIndex();
+            await saveLightIndexToCache(lightIndex, metadata);
+        }
+        
+        // Atualizar store com metadata e light index
+        store.setLightIndex(PageManager.getLightIndex());
+        store.setCatalogMetadata(metadata);
+        
+        // Carregar primeira página
+        await PageManager.goToPage(1);
+        const firstPageData = PageManager.getPageData(1);
+        
+        // Setar obras no store (apenas da página 1)
+        store.setAllManga(firstPageData);
+        store.setLoading(false);
+        
+        // Atualizar subtítulo com total do metadata (não só o que está carregado)
+        dom.subtitle.textContent = `${metadata.totalMangas} obras no catálogo`;
+        
+        // Configurar sistema de busca com light index
+        setupLazyLoadingSearchSystem();
+        
+        // Stats de memória
+        const stats = PageManager.getMemoryStats();
+        debugLog('PageManager stats', stats);
+        console.log(`✅ Lazy loading: ${stats.loadedMangaCount}/${stats.lightIndexSize} obras em memória (${stats.loadedPages} páginas)`);
+        
+        return true;
+        
+    } catch (error) {
+        console.error('❌ Erro no lazy loading, voltando para modo tradicional:', error);
+        debugLog('Erro no lazy loading', { error: error.message });
+        
+        // Limpar skeleton
+        if (grid) grid.innerHTML = '';
+        
+        // Fallback: retornar false para usar modo tradicional
+        return false;
+    }
+}
+
+/**
+ * Configura sistema de busca para lazy loading (usa light index)
+ */
+const setupLazyLoadingSearchSystem = () => {
+    if (isSearchSystemInitialized) {
+        debugLog('Sistema de busca já inicializado');
+        return;
+    }
+
+    const dom = getDOM();
+    const lightIndex = PageManager.getLightIndex();
+
+    if (lightIndex.length === 0) {
+        debugLog('Light index vazio, aguardando');
+        return;
+    }
+
+    try {
+        // Limpar sistema anterior
+        if (autocomplete) {
+            autocomplete.destroy();
+            autocomplete = null;
+        }
+        if (searchDebounce) {
+            searchDebounce.cancel();
+            searchDebounce = null;
+        }
+
+        // Remover listeners anteriores
+        const newInput = dom.searchInput.cloneNode(true);
+        dom.searchInput.parentNode.replaceChild(newInput, dom.searchInput);
+        dom.searchInput = newInput;
+
+        // Registrar fonte de dados com light index
+        searchEngine.registerDataSource('library', () => {
+            const { favorites } = store.getState();
+            return lightIndex.map(m => ({
+                ...m,
+                isFavorite: favorites.has(m.url)
+            }));
+        });
+
+        // Configurar debounce para busca
+        searchDebounce = new SmartDebounce(
+            (query) => {
+                debugLog('Busca lazy loading', { query });
+                
+                const { filters, query: cleanQuery } = parseQueryFilters(query);
+                
+                if (filters.type && filters.type !== 'all') {
+                    store.setActiveTypeFilter(filters.type);
+                }
+                if (filters.status && filters.status !== 'all') {
+                    store.setActiveStatusFilter(filters.status);
+                }
+                
+                // Buscar no PageManager (light index)
+                const searchResults = PageManager.search(cleanQuery || query, {
+                    type: store.getState().activeTypeFilter
+                });
+                
+                // Atualizar store com resultados (limitados para performance)
+                store.setSearchQuery(cleanQuery || query);
+                store.setCurrentPage(1);
+                
+                // Se tem busca, mostrar resultados do light index
+                // Se não tem, mostrar página atual
+                if (query.trim()) {
+                    // Limitar resultados visíveis para não sobrecarregar
+                    const visibleResults = searchResults.slice(0, 100);
+                    store.setAllManga(visibleResults);
+                } else {
+                    // Voltar para visualização paginada
+                    const currentPage = store.getState().currentPage;
+                    const pageData = PageManager.getPageData(currentPage);
+                    store.setAllManga(pageData);
+                }
+
+                if (query.length >= 2) {
+                    searchEngine.addToHistory(query, searchResults.length);
+                    analytics?.trackSearch(query, searchResults.length, 'search_input');
+                }
+            },
+            {
+                wait: 150,
+                minLength: 0,
+                maxWait: 500,
+                immediate: false
+            }
+        );
+
+        // Configurar autocomplete
+        autocomplete = new SmartAutocomplete(dom.searchInput, lightIndex, {
+            maxSuggestions: 10,
+            showRecentSearches: true,
+            onSelect: (suggestion) => {
+                debugLog('Autocomplete selecionado (lazy)', { suggestion });
+                
+                // Encontrar em qual página está a obra selecionada
+                const mangaId = suggestion.id || suggestion.url;
+                if (mangaId) {
+                    const page = PageManager.findMangaPage(mangaId);
+                    if (page > 0) {
+                        // Navegar para a página e destacar
+                        handleLazyPageChange(page);
+                    }
+                }
+                
+                searchDebounce.execute(suggestion.text);
+                analytics?.trackUserInteraction('autocomplete', 'select', {
+                    suggestionType: suggestion.type,
+                    query: suggestion.text
+                });
+            },
+            onInput: (query) => {
+                debugLog('Input autocomplete (lazy)', { query });
+                searchDebounce.execute(query);
+            }
+        });
+
+        // Configurar atalhos de teclado
+        keyboardShortcuts.on('focusSearch', () => {
+            dom.searchInput.focus();
+            dom.searchInput.select();
+        });
+        
+        keyboardShortcuts.on('clearSearch', () => {
+            dom.searchInput.value = '';
+            store.setSearchQuery('');
+            // Voltar para página 1 após limpar busca
+            handleLazyPageChange(1);
+        });
+        
+        keyboardShortcuts.on('blurSearch', () => {
+            if (autocomplete) autocomplete.hide();
+        });
+
+        isSearchSystemInitialized = true;
+        debugLog('Sistema de busca lazy loading inicializado');
+
+    } catch (error) {
+        console.error('Erro ao configurar busca lazy loading:', error);
+        errorNotificationManager.showError(
+            'Erro no Sistema de Busca',
+            'O sistema de busca encontrou um problema.',
+            'warning'
+        );
+    }
+};
+
+/**
+ * Manipula mudança de página no modo lazy loading
+ */
+async function handleLazyPageChange(pageNumber) {
+    debugLog('Mudando para página (lazy)', { pageNumber });
+    
+    const grid = document.getElementById('manga-grid');
+    
+    // Verificar se página já está carregada
+    if (!PageManager.isPageLoaded(pageNumber)) {
+        // Mostrar skeleton enquanto carrega
+        if (grid) {
+            grid.innerHTML = generateSkeletonCards(ITEMS_PER_PAGE);
+        }
+    }
+    
+    // Navegar no PageManager (carrega se necessário, remove páginas fora da janela)
+    await PageManager.goToPage(pageNumber);
+    
+    // Atualizar store
+    store.setCurrentPage(pageNumber);
+    const pageData = PageManager.getPageData(pageNumber);
+    
+    // Se não está em modo busca, atualizar allManga com dados da página
+    if (!store.getState().searchQuery) {
+        store.setAllManga(pageData);
+    }
+    
+    // Log de memória
+    const stats = PageManager.getMemoryStats();
+    debugLog('Lazy page change complete', { 
+        page: pageNumber, 
+        loadedPages: stats.loadedPages,
+        loadedManga: stats.loadedMangaCount 
+    });
+}
+
+// Exportar para uso global (event listeners de paginação)
+window.handleLazyPageChange = handleLazyPageChange;
+
 // Flag para evitar reinicialização múltipla
 let appInitialized = false;
 
@@ -636,6 +934,36 @@ async function initializeApp() {
         gestureManager = new GestureNavigationManager(store);
     }
 
+    // ============================================
+    // LAZY LOADING: Novo fluxo de inicialização
+    // ============================================
+    if (LAZY_LOADING_ENABLED) {
+        debugLog('Tentando inicialização com lazy loading');
+        
+        const lazySuccess = await initializeAppWithLazyLoading(dom);
+        
+        if (lazySuccess) {
+            // Lazy loading funcionou, configurar resto do app
+            await registerServiceWorker();
+            await handleNotificationsPermission();
+            
+            // Iniciar verificação periódica
+            const { settings } = store.getState();
+            if (settings.notificationsEnabled) {
+                startPeriodicUpdateCheck();
+            }
+            
+            return; // Sucesso no lazy loading
+        }
+        
+        // Se lazy loading falhou, continuar com fluxo tradicional
+        console.log('⚠️ Lazy loading falhou, usando modo tradicional');
+    }
+
+    // ============================================
+    // FLUXO TRADICIONAL: Cache completo ou Worker
+    // ============================================
+    
     // Tentar carregar do cache primeiro
     const cachedManga = await getMangaCache();
     const localVersion = await getMangaCacheVersion();
@@ -644,7 +972,7 @@ async function initializeApp() {
 
     if (hasCachedData) {
         // Cache existe - carregar imediatamente
-        debugLog('Carregando do cache', { 
+        debugLog('Carregando do cache (modo tradicional)', { 
             items: cachedManga.length, 
             version: localVersion,
             lastUpdated: localLastUpdated 

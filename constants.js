@@ -6,6 +6,9 @@ export const CACHE_DURATION_MS = 6 * 60 * 60 * 1000; // 6 horas
 export const UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos - verificação periódica
 export const INDEX_URL = 'https://raw.githubusercontent.com/gikawork/data/refs/heads/main/hub/index.json';
 
+// Configurações de paginação lazy
+export const PAGE_WINDOW_SIZE = 5; // Páginas antes e depois da atual na janela
+
 // NOVO: URL do índice que lista todas as scans
 export const SCANS_INDEX_URL = 'https://raw.githubusercontent.com/gikawork/scan/refs/heads/main/index.json';
 
@@ -31,6 +34,14 @@ export function getInitialState() {
         librarySortOrder: 'title', // Ordenação da biblioteca
         isLoading: true,
         error: null,
+        // LAZY LOADING: Light index para busca rápida
+        lightIndex: [], // {id, title, type, cover_url, url} para todas as obras
+        catalogMetadata: {
+            totalMangas: 0,
+            lastUpdated: 0,
+            version: ''
+        },
+        isPageLoading: false, // Loading de página específica
         // NOVOS ESTADOS PARA SCANS
         scansList: [],
         selectedScan: null, // Armazenará os dados da scan selecionada (info e lista de obras)

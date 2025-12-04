@@ -1,7 +1,7 @@
 import './cache-coordinator.js';
 
 const DB_NAME = 'gikamuraDB';
-const DB_VERSION = 3; // Incrementado para forçar atualização do cache de scans com status corrigido
+const DB_VERSION = 4; // Incrementado para adicionar store de light index
 // Versão do cache de scans agora é dinâmica (vem do scan_info.version)
 
 const MANGA_STORE = 'mangaCatalog';
@@ -11,6 +11,7 @@ const SETTINGS_STORE = 'settings';
 const METADATA_STORE = 'metadata';
 const SCANS_LIST_STORE = 'scansList';
 const SCAN_WORKS_STORE = 'scanWorks';
+const LIGHT_INDEX_STORE = 'lightIndex'; // Cache do índice leve para lazy loading
 
 let db;
 let cacheCoordinator;
@@ -56,6 +57,10 @@ const initDB = () => {
             if (!dbInstance.objectStoreNames.contains(SCAN_WORKS_STORE)) {
                 const scanWorksStore = dbInstance.createObjectStore(SCAN_WORKS_STORE, { keyPath: 'scanUrl' });
                 scanWorksStore.createIndex('timestamp', 'timestamp', { unique: false });
+            }
+            // Store para light index (lazy loading)
+            if (!dbInstance.objectStoreNames.contains(LIGHT_INDEX_STORE)) {
+                dbInstance.createObjectStore(LIGHT_INDEX_STORE, { keyPath: 'key' });
             }
         };
     });
@@ -347,5 +352,96 @@ export const loadScanWorksFromCache = async (scanUrl, expectedVersion = null) =>
         });
     } catch (error) {
         return { works: [], version: null };
+    }
+};
+
+// ============================================
+// FUNÇÕES PARA LAZY LOADING (LIGHT INDEX)
+// ============================================
+
+/**
+ * Salva o light index (índice leve para busca) no IndexedDB
+ * @param {Array} lightIndex - Array de {id, title, type, cover_url}
+ * @param {Object} metadata - {totalMangas, lastUpdated, version}
+ */
+export const saveLightIndexToCache = async (lightIndex, metadata) => {
+    try {
+        await initDB();
+        const transaction = db.transaction(LIGHT_INDEX_STORE, 'readwrite');
+        const store = transaction.objectStore(LIGHT_INDEX_STORE);
+        
+        // Salva os dados como um único registro para performance
+        store.put({ 
+            key: 'lightIndex', 
+            data: lightIndex, 
+            metadata,
+            timestamp: Date.now() 
+        });
+        
+        return new Promise((resolve, reject) => {
+            transaction.oncomplete = () => {
+                console.log(`✅ Light index salvo (${lightIndex.length} obras)`);
+                resolve();
+            };
+            transaction.onerror = (event) => reject(event.target.error);
+        });
+    } catch (error) {
+        console.error('Erro ao salvar light index:', error);
+    }
+};
+
+/**
+ * Carrega o light index do IndexedDB
+ * @param {number} expectedVersion - Versão esperada para validação
+ * @returns {Object} { data: Array, metadata: Object } ou null
+ */
+export const loadLightIndexFromCache = async (expectedVersion = null) => {
+    try {
+        await initDB();
+        const transaction = db.transaction(LIGHT_INDEX_STORE, 'readonly');
+        const store = transaction.objectStore(LIGHT_INDEX_STORE);
+        const request = store.get('lightIndex');
+        
+        return new Promise((resolve) => {
+            request.onsuccess = () => {
+                const cached = request.result;
+                if (!cached || !cached.data) {
+                    resolve(null);
+                    return;
+                }
+                
+                // Validar versão se fornecida
+                if (expectedVersion && cached.metadata?.version !== expectedVersion) {
+                    console.log(`🔄 Light index desatualizado (v${cached.metadata?.version || 'N/A'} vs v${expectedVersion})`);
+                    resolve(null);
+                    return;
+                }
+                
+                console.log(`📦 Light index carregado do cache (${cached.data.length} obras)`);
+                resolve({ data: cached.data, metadata: cached.metadata });
+            };
+            request.onerror = () => resolve(null);
+        });
+    } catch (error) {
+        console.error('Erro ao carregar light index:', error);
+        return null;
+    }
+};
+
+/**
+ * Limpa o light index do cache
+ */
+export const clearLightIndexCache = async () => {
+    try {
+        await initDB();
+        const transaction = db.transaction(LIGHT_INDEX_STORE, 'readwrite');
+        const store = transaction.objectStore(LIGHT_INDEX_STORE);
+        store.clear();
+        return new Promise((resolve) => {
+            transaction.oncomplete = () => resolve();
+            transaction.onerror = () => resolve();
+        });
+    } catch (error) {
+        console.error('Erro ao limpar light index:', error);
     }
 };

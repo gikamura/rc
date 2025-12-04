@@ -1,5 +1,5 @@
 // Service Worker simplificado para evitar problemas de dependências
-const CACHE_VERSION = 'gikamura-v2.6';
+const CACHE_VERSION = 'gikamura-v2.7'; // Lazy loading support
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const DYNAMIC_CACHE = `${CACHE_VERSION}-dynamic`;
 const IMAGE_CACHE = `${CACHE_VERSION}-images`;
@@ -22,6 +22,7 @@ const STATIC_ASSETS = [
     './input-validator.js',
     './local-analytics.js',
     './update-worker.js',
+    './page-manager.js', // Lazy loading manager
     './manifest.json',
     './icons/icon-192.png',
     './icons/icon-512.png',

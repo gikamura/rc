@@ -432,6 +432,49 @@ const createCardMetadata = (icon, title, value) => `
         <span class="truncate">${value}</span>
     </div>`;
 
+/**
+ * Gera skeleton cards HTML para loading de página
+ * @param {number} count - Número de skeleton cards
+ * @returns {string} HTML dos skeleton cards
+ */
+export const generateSkeletonCards = (count = 21) => {
+    let html = '';
+    for (let i = 0; i < count; i++) {
+        html += `
+        <div class="skeleton-card animate-pulse contents">
+            <!-- MOBILE skeleton -->
+            <div class="card-mobile block md:hidden bg-[#1a1a1a] rounded-lg overflow-hidden">
+                <div class="aspect-[2/3] relative bg-gray-800">
+                    <div class="absolute bottom-0 left-0 right-0 p-2 space-y-1">
+                        <div class="h-4 bg-gray-700 rounded w-3/4"></div>
+                        <div class="flex gap-1">
+                            <div class="h-3 bg-gray-700 rounded w-10"></div>
+                            <div class="h-3 bg-gray-700 rounded w-14"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- DESKTOP skeleton -->
+            <div class="card-desktop hidden md:block bg-[#1a1a1a] rounded-lg overflow-hidden" style="height: 16rem;">
+                <div class="flex h-full">
+                    <div class="w-1/3 flex-shrink-0 bg-gray-800"></div>
+                    <div class="flex-1 p-4 space-y-3">
+                        <div class="h-5 bg-gray-700 rounded w-3/4"></div>
+                        <div class="h-3 bg-gray-700 rounded w-full"></div>
+                        <div class="h-3 bg-gray-700 rounded w-5/6"></div>
+                        <div class="h-3 bg-gray-700 rounded w-4/6"></div>
+                        <div class="mt-auto flex gap-3">
+                            <div class="h-3 bg-gray-700 rounded w-16"></div>
+                            <div class="h-3 bg-gray-700 rounded w-16"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+    }
+    return html;
+};
+
 // Exportada para uso no carregamento progressivo
 export const createCardHTML = (data, isFavorite) => {
     const iconUser = `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" /></svg>`;
@@ -753,6 +796,9 @@ export function renderApp() {
     let itemsToDisplay = [];
     let totalPaginationItems = 0;
 
+    // Verificar se estamos em modo lazy loading (metadata disponível com totalMangas)
+    const isLazyLoadingMode = state.catalogMetadata?.totalMangas > 0 && !state.searchQuery;
+
     switch (state.activeTab) {
         case 'home':
             // Otimização: usar slice primeiro, depois sort (ordena só 20 itens)
@@ -804,8 +850,15 @@ export function renderApp() {
                 });
             }
             
-            totalPaginationItems = filteredLibrary.length;
-            itemsToDisplay = filteredLibrary.slice((state.currentPage - 1) * ITEMS_PER_PAGE, state.currentPage * ITEMS_PER_PAGE);
+            // Em lazy loading sem busca, usar total do metadata
+            // Com busca ou filtros, usar tamanho do array filtrado
+            if (isLazyLoadingMode && state.activeTypeFilter === 'all' && state.activeStatusFilter === 'all') {
+                totalPaginationItems = state.catalogMetadata.totalMangas;
+                itemsToDisplay = state.allManga; // Já contém apenas os dados da página atual
+            } else {
+                totalPaginationItems = filteredLibrary.length;
+                itemsToDisplay = filteredLibrary.slice((state.currentPage - 1) * ITEMS_PER_PAGE, state.currentPage * ITEMS_PER_PAGE);
+            }
             break;
         case 'favorites':
             // Otimização: filtrar primeiro, depois combinar (evita processar milhares de não-favoritos)
