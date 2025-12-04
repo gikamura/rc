@@ -24,5 +24,8 @@ Thumbs.db
 # Temporários
 tmp/
 temp/
+
+# Evitar commit/push dos diretórios abaixo
 scripts/
-.github
+.github/
+scripts/
