@@ -682,10 +682,12 @@ async function initializeAppWithLazyLoading(dom) {
         // Atualizar store com metadata e light index
         store.setLightIndex(PageManager.getLightIndex());
         store.setCatalogMetadata(metadata);
+        console.log('📊 Metadata setado no store:', metadata);
         
         // Carregar primeira página
         await PageManager.goToPage(1);
         const firstPageData = PageManager.getPageData(1);
+        console.log('📖 Dados da página 1:', firstPageData.length, 'itens');
         
         // Setar obras no store (apenas da página 1)
         store.setAllManga(firstPageData);

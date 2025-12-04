@@ -802,6 +802,13 @@ export function renderApp() {
         && !state.searchQuery 
         && state.activeTypeFilter === 'all' 
         && state.activeStatusFilter === 'all';
+    
+    console.log('🎯 renderApp - isLazyLoadingMode:', isLazyLoadingMode, {
+        totalMangas: state.catalogMetadata?.totalMangas,
+        searchQuery: state.searchQuery,
+        typeFilter: state.activeTypeFilter,
+        statusFilter: state.activeStatusFilter
+    });
 
     switch (state.activeTab) {
         case 'home':
