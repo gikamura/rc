@@ -24,6 +24,7 @@ Thumbs.db
 # Temporários
 tmp/
 temp/
+scripts
 
 # Evitar commit/push dos diretórios abaixo
 .github/copilot-instructions.md
