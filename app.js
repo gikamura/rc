@@ -46,6 +46,9 @@ let autocomplete = null;
 let searchDebounce = null;
 let isSearchSystemInitialized = false;
 
+// Flag para evitar que a verificação de updates rode antes do fim do carregamento inicial
+let isInitialLoadComplete = false;
+
 // Sistema de autocomplete para scans
 let scanAutocomplete = null;
 let scanSearchDebounce = null;
@@ -431,10 +434,33 @@ function setupEventListeners() {
 
     document.body.addEventListener('click', (e) => {
         const typeButton = e.target.closest('#type-filter-container .filter-btn');
-        if (typeButton) store.setActiveTypeFilter(typeButton.dataset.type);
-
         const statusButton = e.target.closest('#status-filter-container .filter-btn');
-        if (statusButton) store.setActiveStatusFilter(statusButton.dataset.status);
+
+        if (LAZY_LOADING_ENABLED && (typeButton || statusButton)) {
+            const currentFilters = store.getState();
+            const newType = typeButton ? typeButton.dataset.type : currentFilters.activeTypeFilter;
+            const newStatus = statusButton ? statusButton.dataset.status : currentFilters.activeStatusFilter;
+
+            // Update store first (this will trigger a re-render of the button states)
+            if (typeButton) store.setActiveTypeFilter(newType);
+            if (statusButton) store.setActiveStatusFilter(newStatus);
+            
+            // Then, command the PageManager to create a new filtered index
+            PageManager.applyFilters({
+                type: newType,
+                status: newStatus,
+                query: currentFilters.searchQuery
+            });
+            
+            // Finally, navigate to the first page of the new filtered view
+            // This will trigger the new window loading logic in PageManager
+            handleLazyPageChange(1);
+
+        } else {
+            // Fallback or non-lazy-loading behavior
+            if (typeButton) store.setActiveTypeFilter(typeButton.dataset.type);
+            if (statusButton) store.setActiveStatusFilter(statusButton.dataset.status);
+        }
         
         const favoriteBtn = e.target.closest('.favorite-btn');
         if (favoriteBtn) {
@@ -683,6 +709,11 @@ async function initializeAppWithLazyLoading(dom) {
         store.setLightIndex(PageManager.getLightIndex());
         store.setCatalogMetadata(metadata);
         console.log('📊 Metadata setado no store:', metadata);
+
+        // PERSISTIR lastUpdated para que o indicador de atualização funcione corretamente
+        await setMetadata('catalogLastUpdated', metadata.lastUpdated.toString());
+        await setMangaCacheVersion(metadata.version);
+        debugLog('LastUpdated e Version persistidos no cache:', { lastUpdated: metadata.lastUpdated, version: metadata.version });
         
         // Configurar callback para quando detalhes são atualizados
         PageManager.setOnDetailsUpdated(() => {
@@ -777,46 +808,29 @@ const setupLazyLoadingSearchSystem = () => {
                 debugLog('Busca lazy loading', { query });
                 
                 const { filters, query: cleanQuery } = parseQueryFilters(query);
+                store.setSearchQuery(cleanQuery || query);
                 
+                // Aplicar filtros inline, se houver
                 if (filters.type && filters.type !== 'all') {
                     store.setActiveTypeFilter(filters.type);
                 }
                 if (filters.status && filters.status !== 'all') {
                     store.setActiveStatusFilter(filters.status);
                 }
-                
-                // Buscar no PageManager (light index)
-                const searchResults = PageManager.search(cleanQuery || query, {
-                    type: store.getState().activeTypeFilter
+
+                // Usar o novo mecanismo centralizado de filtros do PageManager
+                const state = store.getState();
+                PageManager.applyFilters({
+                    type: state.activeTypeFilter,
+                    status: state.activeStatusFilter,
+                    query: cleanQuery || query
                 });
-                
-                // Atualizar store com resultados (limitados para performance)
-                store.setSearchQuery(cleanQuery || query);
-                store.setCurrentPage(1);
-                
-                // Se tem busca, mostrar resultados do light index
-                // Se não tem, mostrar página atual
-                if (query.trim()) {
-                    // Limitar resultados visíveis para não sobrecarregar
-                    // Converter para formato que createCardHTML espera
-                    const visibleResults = searchResults.slice(0, 100).map(item => ({
-                        ...item,
-                        imageUrl: item.cover_url || item.imageUrl || '',
-                        status: item.status || 'unknown',
-                        author: item.author || 'N/A',
-                        artist: item.artist || 'N/A',
-                        description: item.description || '',
-                        chapterCount: item.chapterCount || 0
-                    }));
-                    store.setAllManga(visibleResults);
-                } else {
-                    // Voltar para visualização paginada
-                    const currentPage = store.getState().currentPage;
-                    const pageData = PageManager.getPageData(currentPage);
-                    store.setAllManga(pageData);
-                }
+
+                // Navegar para a primeira página dos resultados filtrados
+                handleLazyPageChange(1);
 
                 if (query.length >= 2) {
+                    const searchResults = PageManager.search(query, {}); // Apenas para contagem
                     searchEngine.addToHistory(query, searchResults.length);
                     analytics?.trackSearch(query, searchResults.length, 'search_input');
                 }
@@ -911,10 +925,9 @@ async function handleLazyPageChange(pageNumber) {
     store.setCurrentPage(pageNumber);
     const pageData = PageManager.getPageData(pageNumber);
     
-    // Se não está em modo busca, atualizar allManga com dados da página
-    if (!store.getState().searchQuery) {
-        store.setAllManga(pageData);
-    }
+    // Sempre atualizar o `allManga` do store com os dados da página recém-carregada.
+    // A lógica de filtragem/busca já foi tratada pelo PageManager.
+    store.setAllManga(pageData);
     
     // Agendar busca de detalhes para a nova página
     PageManager.scheduleDetailsForPage(pageNumber);
@@ -978,6 +991,7 @@ async function initializeApp() {
                 startPeriodicUpdateCheck();
             }
             
+            isInitialLoadComplete = true;
             return; // Sucesso no lazy loading
         }
         
@@ -1044,6 +1058,7 @@ async function initializeApp() {
             startPeriodicUpdateCheck();
         }
         
+        isInitialLoadComplete = true;
         return;
     }
 
@@ -1145,6 +1160,7 @@ async function initializeApp() {
                         startPeriodicUpdateCheck();
                     }
 
+                    isInitialLoadComplete = true;
                     break;
                 case 'error':
                     // Reativar notificações em caso de erro
@@ -1214,6 +1230,10 @@ async function initializeApp() {
 
 // Verificar atualizações em background comparando lastUpdated do metadata
 async function checkForUpdatesInBackground(showIndicator = true) {
+    if (!isInitialLoadComplete) {
+        debugLog('Verificação de atualização ignorada, carregamento inicial em andamento.');
+        return { hasUpdates: false };
+    }
     debugLog('Verificando atualizações em background');
     
     try {
@@ -1230,7 +1250,7 @@ async function checkForUpdatesInBackground(showIndicator = true) {
         // Obter timestamps locais
         const localLastUpdated = parseInt(await getMetadata('catalogLastUpdated') || '0');
         const localVersion = await getMangaCacheVersion();
-        const currentCount = store.getState().allManga.length;
+        const localTotalMangas = store.getState().catalogMetadata?.totalMangas || store.getState().allManga.length;
         
         debugLog('Comparando timestamps', { 
             remoteLastUpdated, 
@@ -1238,16 +1258,16 @@ async function checkForUpdatesInBackground(showIndicator = true) {
             remoteVersion,
             localVersion,
             remoteTotalMangas,
-            currentCount
+            localTotalMangas
         });
         
         // Calcular diferenças
-        const newWorksCount = remoteTotalMangas && currentCount > 0 
-            ? Math.max(0, remoteTotalMangas - currentCount) 
+        const newWorksCount = remoteTotalMangas && localTotalMangas > 0 
+            ? Math.max(0, remoteTotalMangas - localTotalMangas) 
             : 0;
         const hasNewWorks = newWorksCount > 0;
         const hasNewChapters = remoteLastUpdated && remoteLastUpdated > localLastUpdated;
-        
+
         // Comparar lastUpdated - detecta QUALQUER mudança (obras ou capítulos)
         if (hasNewChapters || hasNewWorks) {
             debugLog('Novidades detectadas', { 

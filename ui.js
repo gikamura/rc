@@ -1,6 +1,7 @@
 import { store } from './store.js';
 import { ITEMS_PER_PAGE } from './constants.js';
 import { calculateRelevanceScore, similarity } from './search-engine.js';
+import * as PageManager from './page-manager.js';
 
 // Sistema de fallback inteligente para imagens com AllOrigins
 window.handleImageError = function(img, originalUrl) {
@@ -843,68 +844,13 @@ export function renderApp() {
             }
             break;
         case 'library':
-            // LAZY LOADING MODE (sem filtros): dados já vêm paginados do PageManager
-            if (isLazyLoadingMode) {
-                totalPaginationItems = state.catalogMetadata.totalMangas;
-                itemsToDisplay = state.allManga; // Já contém apenas os dados da página atual
-            } else if (isLazyWithFilters) {
-                // LAZY COM FILTROS: filtrar do lightIndex completo
-                // lightIndex agora tem status, então podemos filtrar tudo
-                let filteredFromLight = [];
-                const sourceData = state.lightIndex;
-                
-                for (let i = 0; i < sourceData.length; i++) {
-                    const m = sourceData[i];
-                    if (state.activeTypeFilter !== 'all' && m.type !== state.activeTypeFilter) continue;
-                    if (state.activeStatusFilter !== 'all' && (m.status || 'unknown') !== state.activeStatusFilter) continue;
-                    filteredFromLight.push(m);
-                }
-                
-                // Se há busca, filtrar por título
-                if (state.searchQuery && state.searchQuery.length >= 2) {
-                    const searchTerm = state.searchQuery.toLowerCase();
-                    filteredFromLight = filteredFromLight.filter(m => 
-                        (m.title || '').toLowerCase().includes(searchTerm)
-                    );
-                    // Ordenar: títulos que começam com o termo primeiro
-                    filteredFromLight.sort((a, b) => {
-                        const aTitle = (a.title || '').toLowerCase();
-                        const bTitle = (b.title || '').toLowerCase();
-                        const aStarts = aTitle.startsWith(searchTerm);
-                        const bStarts = bTitle.startsWith(searchTerm);
-                        if (aStarts && !bStarts) return -1;
-                        if (!aStarts && bStarts) return 1;
-                        return aTitle.localeCompare(bTitle);
-                    });
-                } else {
-                    // Ordenar por título
-                    filteredFromLight.sort((a, b) => 
-                        (a.title || '').localeCompare(b.title || '', undefined, { numeric: true, sensitivity: 'base' })
-                    );
-                }
-                
-                totalPaginationItems = filteredFromLight.length;
-                // Paginar e adicionar campos necessários para renderização
-                const pageStart = (state.currentPage - 1) * ITEMS_PER_PAGE;
-                itemsToDisplay = filteredFromLight.slice(pageStart, pageStart + ITEMS_PER_PAGE).map(m => {
-                    // Se veio de allManga (tem detalhes), usar dados existentes
-                    // Se veio de lightIndex, usar valores padrão
-                    if (m.author && m.author !== 'N/A') {
-                        return {
-                            ...m,
-                            imageUrl: m.imageUrl || m.cover_url || ''
-                        };
-                    }
-                    return {
-                        ...m,
-                        imageUrl: m.cover_url || '',
-                        status: m.status || 'unknown',
-                        author: m.author || 'N/A',
-                        artist: m.artist || 'N/A',
-                        description: m.description || '',
-                        chapterCount: m.chapterCount || 0
-                    };
-                });
+            const isLazy = state.catalogMetadata?.totalMangas > 0;
+
+            if (isLazy) {
+                // Em modo lazy, o PageManager é a fonte da verdade para o total de páginas (filtrado ou não)
+                // e o state.allManga contém a página de dados atual.
+                totalPaginationItems = PageManager.getTotalPages() * ITEMS_PER_PAGE;
+                itemsToDisplay = state.allManga;
             } else {
                 // MODO TRADICIONAL: filtrar e paginar localmente
                 let filteredLibrary = [];
@@ -940,7 +886,7 @@ export function renderApp() {
                     // Ordenar cópia (não modifica state.allManga)
                     filteredLibrary.sort((a, b) => {
                         if (state.librarySortOrder === 'latest') {
-                            return (b.lastUpdated || 0) - (a.lastUpdated || 0);
+                            return (b.lastUpdated || 0) - (b.lastUpdated || 0);
                         }
                         return (a.title || '').localeCompare(b.title || '', undefined, { numeric: true, sensitivity: 'base' });
                     });

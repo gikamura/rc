@@ -26,6 +26,5 @@ tmp/
 temp/
 
 # Evitar commit/push dos diretórios abaixo
-scripts/
-.github/
-scripts/
+.github/copilot-instructions.md
+.github/copilot-instructions.md
