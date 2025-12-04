@@ -15,6 +15,24 @@ import { ITEMS_PER_PAGE, INDEX_URL } from './constants.js';
 const WINDOW_SIZE = 5; // Páginas antes e depois da atual
 
 /**
+ * Fetch com timeout (não depende de SharedUtils)
+ */
+async function fetchWithTimeout(url, options = {}) {
+    const { timeout = 30000 } = options;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    
+    try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(timeoutId);
+        return response;
+    } catch (error) {
+        clearTimeout(timeoutId);
+        throw error;
+    }
+}
+
+/**
  * Estado interno do PageManager
  */
 let state = {
@@ -312,7 +330,6 @@ export async function initialize(options = {}) {
     state.onLoadingStart?.();
     
     try {
-        const { fetchWithTimeout } = window.SharedUtils;
         const response = await fetchWithTimeout(INDEX_URL, { timeout: 30000 });
         const indexData = await response.json();
         
