@@ -246,7 +246,7 @@ function inferTypeFromKey(key) {
 const normalizeStatus = (rawStatus) => {
     if (!rawStatus) return 'unknown';
     const s = rawStatus.toLowerCase().trim();
-    if (s.includes('andamento') || s.includes('ongoing') || s === 'releasing') return 'ongoing';
+    if (s.includes('andamento') || s.includes('ongoing') || s === 'releasing' || s.includes('lançamento')) return 'ongoing';
     if (s.includes('complet') || s.includes('finished')) return 'completed';
     if (s.includes('pausa') || s.includes('hiatus') || s.includes('dropped')) return 'hiatus';
     if (s.includes('cancel')) return 'hiatus';
@@ -648,8 +648,16 @@ async function processDetailsQueue() {
             batch.map(async (manga) => {
                 const details = await fetchMangaDetails(manga);
                 if (details) {
-                    // Atualizar o objeto manga diretamente
+                    // Guarda o status original do index.json
+                    const originalStatus = manga.status;
+                    // Atualiza o objeto com os detalhes do arquivo da obra
                     Object.assign(manga, details);
+                    
+                    // Se o status original era válido (não era 'unknown' ou 'N/A'), ele tem prioridade.
+                    // Isso implementa o fallback: o status do detalhe só é usado se o do index for 'unknown'.
+                    if (originalStatus && originalStatus !== 'unknown' && originalStatus !== 'N/A') {
+                        manga.status = originalStatus;
+                    }
                     return manga;
                 }
                 return null;
