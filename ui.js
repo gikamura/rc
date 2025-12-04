@@ -849,15 +849,14 @@ export function renderApp() {
                 itemsToDisplay = state.allManga; // Já contém apenas os dados da página atual
             } else if (isLazyWithFilters) {
                 // LAZY COM FILTROS: filtrar do lightIndex completo
+                // lightIndex agora tem status, então podemos filtrar tudo
                 let filteredFromLight = [];
                 const sourceData = state.lightIndex;
                 
-                // Aplicar filtros
                 for (let i = 0; i < sourceData.length; i++) {
                     const m = sourceData[i];
                     if (state.activeTypeFilter !== 'all' && m.type !== state.activeTypeFilter) continue;
-                    // Light index não tem status detalhado, pular filtro de status no lazy mode
-                    // (status só está disponível após fetch dos detalhes)
+                    if (state.activeStatusFilter !== 'all' && (m.status || 'unknown') !== state.activeStatusFilter) continue;
                     filteredFromLight.push(m);
                 }
                 
@@ -887,15 +886,25 @@ export function renderApp() {
                 totalPaginationItems = filteredFromLight.length;
                 // Paginar e adicionar campos necessários para renderização
                 const pageStart = (state.currentPage - 1) * ITEMS_PER_PAGE;
-                itemsToDisplay = filteredFromLight.slice(pageStart, pageStart + ITEMS_PER_PAGE).map(m => ({
-                    ...m,
-                    imageUrl: m.cover_url || '',
-                    status: 'unknown',
-                    author: 'N/A',
-                    artist: 'N/A',
-                    description: '',
-                    chapterCount: 0
-                }));
+                itemsToDisplay = filteredFromLight.slice(pageStart, pageStart + ITEMS_PER_PAGE).map(m => {
+                    // Se veio de allManga (tem detalhes), usar dados existentes
+                    // Se veio de lightIndex, usar valores padrão
+                    if (m.author && m.author !== 'N/A') {
+                        return {
+                            ...m,
+                            imageUrl: m.imageUrl || m.cover_url || ''
+                        };
+                    }
+                    return {
+                        ...m,
+                        imageUrl: m.cover_url || '',
+                        status: m.status || 'unknown',
+                        author: m.author || 'N/A',
+                        artist: m.artist || 'N/A',
+                        description: m.description || '',
+                        chapterCount: m.chapterCount || 0
+                    };
+                });
             } else {
                 // MODO TRADICIONAL: filtrar e paginar localmente
                 let filteredLibrary = [];

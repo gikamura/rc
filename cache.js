@@ -361,7 +361,7 @@ export const loadScanWorksFromCache = async (scanUrl, expectedVersion = null) =>
 
 /**
  * Salva o light index (índice leve para busca) no IndexedDB
- * @param {Array} lightIndex - Array de {id, title, type, cover_url}
+ * @param {Array} lightIndex - Array de {id, title, type, cover_url, url, status}
  * @param {Object} metadata - {totalMangas, lastUpdated, version}
  */
 export const saveLightIndexToCache = async (lightIndex, metadata) => {

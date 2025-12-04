@@ -152,7 +152,8 @@ function indexEntryToLight(key, entry) {
         title: entry.title || chapter.title || 'Sem título',
         type: chapter.type || inferTypeFromKey(key),
         cover_url: chapter.cover_url || '',
-        url: chapter.url || ''
+        url: chapter.url || '',
+        status: entry.status || 'unknown' // Status agora vem do índice
     };
 }
 
@@ -498,8 +499,11 @@ async function fetchMangaDetails(manga) {
     
     try {
         // Decodificar gist ID (base64) para obter URL do JSON
+        // O path decodificado começa com "raw/", precisa remover para montar a URL correta
         const decodedPath = atob(gistId);
-        const jsonUrl = `https://raw.githubusercontent.com/${decodedPath}`;
+        // raw/gikawork/data/... -> gikawork/data/...
+        const cleanPath = decodedPath.startsWith('raw/') ? decodedPath.slice(4) : decodedPath;
+        const jsonUrl = `https://raw.githubusercontent.com/${cleanPath}`;
         
         const response = await fetchWithTimeout(jsonUrl, { timeout: 10000 });
         if (!response.ok) {
@@ -508,12 +512,23 @@ async function fetchMangaDetails(manga) {
         
         const data = await response.json();
         
+        // Normalizar status para valores esperados pelos filtros
+        const normalizeStatus = (rawStatus) => {
+            if (!rawStatus) return 'unknown';
+            const s = rawStatus.toLowerCase().trim();
+            if (s.includes('andamento') || s.includes('ongoing') || s === 'releasing') return 'ongoing';
+            if (s.includes('complet') || s === 'finished') return 'completed';
+            if (s.includes('pausa') || s.includes('hiatus') || s.includes('dropped')) return 'hiatus';
+            if (s.includes('cancel')) return 'hiatus';
+            return 'unknown';
+        };
+        
         // Extrair detalhes
         const details = {
             author: data.author || 'N/A',
             artist: data.artist || 'N/A',
             description: data.description || '',
-            status: data.status || 'unknown',
+            status: normalizeStatus(data.status),
             chapterCount: Object.keys(data.chapters || {}).length,
             chapters: data.chapters || {}
         };

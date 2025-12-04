@@ -14,7 +14,6 @@
 sed -i "s/gikamura-v[0-9]\+\.[0-9]\+/gikamura-v2.X/" sw.js
 ```
 
----
 
 ## Visão Geral
 
@@ -64,82 +63,73 @@ importScripts('./shared-utils.js');
 ```
 
 ### Performance com 3000+ obras
-```javascript
-// ❌ sort() modifica array original do state
-state.allManga.sort((a, b) => ...);
+# Copilot Instructions — Gikamura Reader
 
-// ✅ Criar cópia OU filtrar para novo array
-const sorted = [...state.allManga].sort(...);
-// OU filtrar inline evitando criar intermediários:
-const filtered = [];
-for (let i = 0; i < state.allManga.length; i++) {
-    if (matchesFilter(state.allManga[i])) filtered.push(state.allManga[i]);
+Aviso rápido: este repositório é um PWA 100% frontend (Vanilla JS, sem build). Siga estritamente os padrões abaixo.
+
+## Regras críticas de deploy
+- **NUNCA** dar push para `origin` sem autorização explícita. Use `git push rc main` para testes.
+- Ao publicar em `origin`, incremente manualmente a versão do SW em `sw.js` (linha `CACHE_VERSION`) antes do push.
+  Exemplo rápido:
+  ```bash
+  sed -i "s/gikamura-v[0-9]\+\.[0-9]\+/gikamura-v2.X/" sw.js
+  ```
+
+## Visão geral e arquitetura (arquivos-chave)
+- `app.js`: entrada, registra Service Worker e orquestra Workers/UI/Store.
+- `store.js`: estado central (observer pattern). Usa `setSuppressNotify(true/false)` para cargas em lote.
+- `ui.js`: renderização DOM; use `getDOM()` para caches de seletores.
+- `shared-utils.js`: utilitários reusáveis (disponíveis em `window.SharedUtils` e via `importScripts` nos Workers).
+- `update-worker.js`: Web Worker (não é módulo ES6) que chama `fetchAndProcessMangaData` (batches de 200).
+- `sw.js`: service worker clássico — contém `CACHE_VERSION` e listas de assets estáticos.
+
+## Padrões e convenções específicos
+- Web Workers: NUNCA usar `import`/`export` — use `importScripts('./shared-utils.js')`.
+- Batch processing: padrão é BATCH_SIZE ≈ 200 e BATCH_DELAY ≈ 300ms (ver `shared-utils.js`).
+- Memória: não armazene `chapters` completos — o projeto deliberadamente mantém apenas `chapterCount` e carrega capítulos sob demanda (`processMangaUrl` em `shared-utils.js`).
+- Store perf: evite criar cópias desnecessárias; o código usa push/lookup por objeto para performance com milhares de itens.
+
+## Fluxo de dados resumido
+1. `app.js` inicializa store e workers.
+2. Worker (`update-worker.js`) busca `INDEX_URL` (GitHub raw) e processa em lotes, enviando `postMessage({ type: 'batch-processed', payload })` por lote.
+3. Durante batches, código chama `store.setSuppressNotify(true)` para suprimir renders; ao final `setSuppressNotify(false)` e renderizar uma vez.
+
+## Ferramentas e comandos comuns
+- Servir local (sem build):
+  ```bash
+  python -m http.server 8000
+  ```
+- Checar sintaxe JS rapidamente:
+  ```bash
+  for f in *.js; do node --check "$f" 2>&1; done
+  ```
+
+## Service Worker e cache
+- Sempre atualizar `CACHE_VERSION` em `sw.js` antes do deploy para invalidar caches.
+- `sw.js` usa estratégias diferentes: `cacheFirst` para assets/imagens, `networkFirst` para APIs, `stale-while-revalidate` para outros recursos.
+
+## Erros comuns que um agente deve conhecer
+- CORS/Raw GitHub: requests para `raw.githubusercontent.com` podem falhar; `shared-utils.fetchWithTimeout` implementa timeout e retries com backoff.
+- URLs do Cubari são codificadas em base64 — `shared-utils.decodeCubariUrl` e `processMangaUrl` lidam com isso; valide antes de processar.
+
+## Exemplos práticos (trechos relevantes)
+- Suprimir re-renders durante carga em lote:
+  ```javascript
+  store.setSuppressNotify(true);
+  // adicionar many items via store.addMangaToCatalog()
+  store.setSuppressNotify(false);
+  // UI atualiza uma vez
+  ```
+- Worker → main thread (batch):
+  ```js
+  // update-worker.js
+  self.postMessage({ type: 'batch-processed', payload: batch });
+  ```
+
+## Onde olhar primeiro ao editar/estender
+- `shared-utils.js`: regras de fetch, decodificação Cubari, e batch processing — mudanças aqui afetam Workers e thread principal.
+- `store.js`: contratos de notificação e performance (evite mudar assinatura de `setSuppressNotify`).
+- `sw.js`: atualizar `CACHE_VERSION` para deploy.
+
+Se quiser, aplico essas mudanças diretamente no arquivo ou reduzo/expando se preferir mais exemplos. Alguma parte ficou incompleta ou quer que eu inclua exemplos de arquivos específicos (ex.: `processMangaUrl`)?
 }
-```
-
-### Batch Loading Pattern
-```javascript
-// app.js - evitar re-render durante carregamento
-store.setSuppressNotify(true);
-// ... processar muitos itens ...
-store.setSuppressNotify(false);
-renderApp(); // Uma renderização no final
-```
-
-### getDOM() - Cache de Queries
-```javascript
-// ❌ querySelector repetido
-document.getElementById('search-input').value;
-document.getElementById('search-input').focus();
-
-// ✅ Use getDOM() uma vez
-const dom = getDOM();
-dom.searchInput.value;
-dom.searchInput.focus();
-```
-
-### Validação XSS
-```javascript
-import { InputValidator } from './input-validator.js';
-const validator = new InputValidator();
-const safe = validator.validateString(userInput); // Sanitiza HTML
-```
-
-## Service Worker
-
-**SEMPRE incrementar versão ao fazer deploy:**
-```javascript
-// sw.js linha 2
-const CACHE_VERSION = 'gikamura-v2.2'; // ← Incrementar aqui
-```
-
-Estratégias de cache:
-- `cacheFirst`: Assets estáticos (JS, icons)
-- `networkFirst`: API calls (raw.githubusercontent.com)
-- `staleWhileRevalidate`: Outros recursos
-
-## Debugging
-
-```javascript
-window.toggleGikamuraDebug()  // Ativa logs detalhados
-localStorage.setItem('gikamura_debug', 'true') // Persistente
-```
-
-**Problemas Comuns:**
-- Cards vazios → Network tab: verificar GitHub Raw responses
-- SW desatualizado → DevTools > Application > Service Workers > Update
-- Cache corrompido → `localStorage.clear()` + hard refresh
-
-## Dados Externos
-
-Source: `raw.githubusercontent.com` (sem CORS)
-
-**Index Principal** (`constants.js → INDEX_URL`):
-```json
-{
-  "metadata": { "lastUpdated": 1759256696, "totalMangas": 1085 },
-  "mangas": { "KR1017": { "title": "...", "type": "manhwa" } }
-}
-```
-
-**Tipos de obra**: `manga` (JP), `manhwa` (KR), `manhua` (CH) - inferido do prefixo da chave ou campo `type`
