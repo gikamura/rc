@@ -785,7 +785,16 @@ const setupLazyLoadingSearchSystem = () => {
                 // Se não tem, mostrar página atual
                 if (query.trim()) {
                     // Limitar resultados visíveis para não sobrecarregar
-                    const visibleResults = searchResults.slice(0, 100);
+                    // Converter para formato que createCardHTML espera
+                    const visibleResults = searchResults.slice(0, 100).map(item => ({
+                        ...item,
+                        imageUrl: item.cover_url || item.imageUrl || '',
+                        status: item.status || 'unknown',
+                        author: item.author || 'N/A',
+                        artist: item.artist || 'N/A',
+                        description: item.description || '',
+                        chapterCount: item.chapterCount || 0
+                    }));
                     store.setAllManga(visibleResults);
                 } else {
                     // Voltar para visualização paginada

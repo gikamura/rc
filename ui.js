@@ -797,65 +797,71 @@ export function renderApp() {
     let totalPaginationItems = 0;
 
     // Verificar se estamos em modo lazy loading (metadata disponível com totalMangas)
-    const isLazyLoadingMode = state.catalogMetadata?.totalMangas > 0 && !state.searchQuery;
+    // Lazy loading só funciona sem busca e sem filtros ativos
+    const isLazyLoadingMode = state.catalogMetadata?.totalMangas > 0 
+        && !state.searchQuery 
+        && state.activeTypeFilter === 'all' 
+        && state.activeStatusFilter === 'all';
 
     switch (state.activeTab) {
         case 'home':
-            // Otimização: usar slice primeiro, depois sort (ordena só 20 itens)
-            // Pega os 100 mais recentes aproximadamente, ordena, pega 20
-            itemsToDisplay = state.allManga
-                .slice(0, Math.min(200, state.allManga.length))
-                .sort((a, b) => b.lastUpdated - a.lastUpdated)
-                .slice(0, 20);
+            // Em lazy loading, mostrar primeiros 20 da página atual
+            // No modo tradicional, ordenar por lastUpdated
+            if (isLazyLoadingMode) {
+                itemsToDisplay = state.allManga.slice(0, 20);
+            } else {
+                itemsToDisplay = state.allManga
+                    .slice(0, Math.min(200, state.allManga.length))
+                    .sort((a, b) => (b.lastUpdated || 0) - (a.lastUpdated || 0))
+                    .slice(0, 20);
+            }
             break;
         case 'library':
-            let filteredLibrary;
-            
-            // Se há query de busca, usar sistema de relevância com fuzzy
-            if (state.searchQuery && state.searchQuery.length >= 2) {
-                filteredLibrary = [];
-                for (let i = 0; i < state.allManga.length; i++) {
-                    const m = state.allManga[i];
-                    // Aplicar filtros inline para evitar criar arrays intermediários
-                    if (state.activeTypeFilter !== 'all' && m.type !== state.activeTypeFilter) continue;
-                    if (state.activeStatusFilter !== 'all' && (m.status || '').toLowerCase() !== state.activeStatusFilter) continue;
-                    
-                    const { score, matches } = calculateRelevanceScore(m, state.searchQuery, {
-                        fuzzyThreshold: 0.6,
-                        enableFuzzy: true
-                    });
-                    if (score > 0) {
-                        m._score = score;
-                        m._matches = matches;
-                        filteredLibrary.push(m);
-                    }
-                }
-                // Ordenar por relevância quando há busca
-                filteredLibrary.sort((a, b) => b._score - a._score);
-            } else {
-                // Sem busca: filtrar e ordenar em uma passada
-                filteredLibrary = [];
-                for (let i = 0; i < state.allManga.length; i++) {
-                    const m = state.allManga[i];
-                    if (state.activeTypeFilter !== 'all' && m.type !== state.activeTypeFilter) continue;
-                    if (state.activeStatusFilter !== 'all' && (m.status || '').toLowerCase() !== state.activeStatusFilter) continue;
-                    filteredLibrary.push(m);
-                }
-                // Ordenar cópia (não modifica state.allManga)
-                filteredLibrary.sort((a, b) => {
-                    if (state.librarySortOrder === 'latest') {
-                        return b.lastUpdated - a.lastUpdated;
-                    }
-                    return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' });
-                });
-            }
-            
-            // Em lazy loading sem busca, usar total do metadata
-            // Com busca ou filtros, usar tamanho do array filtrado
-            if (isLazyLoadingMode && state.activeTypeFilter === 'all' && state.activeStatusFilter === 'all') {
+            // LAZY LOADING MODE: dados já vêm paginados do PageManager
+            if (isLazyLoadingMode) {
                 totalPaginationItems = state.catalogMetadata.totalMangas;
                 itemsToDisplay = state.allManga; // Já contém apenas os dados da página atual
             } else {
+                // MODO TRADICIONAL: filtrar e paginar localmente
+                let filteredLibrary = [];
+                
+                // Se há query de busca, usar sistema de relevância com fuzzy
+                if (state.searchQuery && state.searchQuery.length >= 2) {
+                    for (let i = 0; i < state.allManga.length; i++) {
+                        const m = state.allManga[i];
+                        // Aplicar filtros inline para evitar criar arrays intermediários
+                        if (state.activeTypeFilter !== 'all' && m.type !== state.activeTypeFilter) continue;
+                        if (state.activeStatusFilter !== 'all' && (m.status || '').toLowerCase() !== state.activeStatusFilter) continue;
+                        
+                        const { score, matches } = calculateRelevanceScore(m, state.searchQuery, {
+                            fuzzyThreshold: 0.6,
+                            enableFuzzy: true
+                        });
+                        if (score > 0) {
+                            m._score = score;
+                            m._matches = matches;
+                            filteredLibrary.push(m);
+                        }
+                    }
+                    // Ordenar por relevância quando há busca
+                    filteredLibrary.sort((a, b) => b._score - a._score);
+                } else {
+                    // Sem busca: filtrar e ordenar em uma passada
+                    for (let i = 0; i < state.allManga.length; i++) {
+                        const m = state.allManga[i];
+                        if (state.activeTypeFilter !== 'all' && m.type !== state.activeTypeFilter) continue;
+                        if (state.activeStatusFilter !== 'all' && (m.status || '').toLowerCase() !== state.activeStatusFilter) continue;
+                        filteredLibrary.push(m);
+                    }
+                    // Ordenar cópia (não modifica state.allManga)
+                    filteredLibrary.sort((a, b) => {
+                        if (state.librarySortOrder === 'latest') {
+                            return (b.lastUpdated || 0) - (a.lastUpdated || 0);
+                        }
+                        return (a.title || '').localeCompare(b.title || '', undefined, { numeric: true, sensitivity: 'base' });
+                    });
+                }
+                
                 totalPaginationItems = filteredLibrary.length;
                 itemsToDisplay = filteredLibrary.slice((state.currentPage - 1) * ITEMS_PER_PAGE, state.currentPage * ITEMS_PER_PAGE);
             }

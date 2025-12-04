@@ -1,5 +1,5 @@
 // Service Worker simplificado para evitar problemas de dependências
-const CACHE_VERSION = 'gikamura-v2.8'; // Lazy loading support
+const CACHE_VERSION = 'gikamura-v2.9'; // Lazy loading support
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const DYNAMIC_CACHE = `${CACHE_VERSION}-dynamic`;
 const IMAGE_CACHE = `${CACHE_VERSION}-images`;
