@@ -449,3 +449,170 @@ export function getMemoryStats() {
         windowSize: WINDOW_SIZE * 2 + 1
     };
 }
+
+// =====================================================
+// DETALHES DAS OBRAS - Fetch do Cubari em batches
+// =====================================================
+
+// Cache de detalhes já buscados (evita refetch)
+const detailsCache = new Map();
+
+// Fila de obras aguardando detalhes
+let detailsQueue = [];
+let isProcessingDetails = false;
+
+// Callback para notificar quando detalhes são atualizados
+let onDetailsUpdated = null;
+
+/**
+ * Configura callback para quando detalhes são atualizados
+ */
+export function setOnDetailsUpdated(callback) {
+    onDetailsUpdated = callback;
+}
+
+/**
+ * Extrai o gist ID de uma URL do Cubari
+ */
+function extractGistId(cubariUrl) {
+    // URL formato: https://cubari.moe/read/gist/cmF3L2dpa2F3b3JrL2RhdGEvcmVmcy9oZWFkcy9tYWluL21oYXcvbWFrcl8xOTcwLmpzb24/
+    const match = cubariUrl.match(/\/gist\/([^/]+)/);
+    return match ? match[1] : null;
+}
+
+/**
+ * Busca detalhes de uma obra do Cubari
+ */
+async function fetchMangaDetails(manga) {
+    const cacheKey = manga.url || manga.id;
+    
+    // Verificar cache
+    if (detailsCache.has(cacheKey)) {
+        return detailsCache.get(cacheKey);
+    }
+    
+    const gistId = extractGistId(manga.url);
+    if (!gistId) {
+        return null;
+    }
+    
+    try {
+        // Decodificar gist ID (base64) para obter URL do JSON
+        const decodedPath = atob(gistId);
+        const jsonUrl = `https://raw.githubusercontent.com/${decodedPath}`;
+        
+        const response = await fetchWithTimeout(jsonUrl, { timeout: 10000 });
+        if (!response.ok) {
+            return null;
+        }
+        
+        const data = await response.json();
+        
+        // Extrair detalhes
+        const details = {
+            author: data.author || 'N/A',
+            artist: data.artist || 'N/A',
+            description: data.description || '',
+            status: data.status || 'unknown',
+            chapterCount: Object.keys(data.chapters || {}).length,
+            chapters: data.chapters || {}
+        };
+        
+        // Salvar no cache
+        detailsCache.set(cacheKey, details);
+        
+        return details;
+        
+    } catch (error) {
+        console.warn(`⚠️ Erro ao buscar detalhes de ${manga.title}:`, error.message);
+        return null;
+    }
+}
+
+/**
+ * Processa a fila de detalhes em batches
+ */
+async function processDetailsQueue() {
+    if (isProcessingDetails || detailsQueue.length === 0) {
+        return;
+    }
+    
+    isProcessingDetails = true;
+    const BATCH_SIZE = 10; // Processar 10 por vez para não sobrecarregar
+    const BATCH_DELAY = 100; // 100ms entre batches
+    
+    console.log(`📋 Processando fila de detalhes: ${detailsQueue.length} obras`);
+    
+    while (detailsQueue.length > 0) {
+        const batch = detailsQueue.splice(0, BATCH_SIZE);
+        
+        // Buscar detalhes em paralelo (dentro do batch)
+        const results = await Promise.allSettled(
+            batch.map(async (manga) => {
+                const details = await fetchMangaDetails(manga);
+                if (details) {
+                    // Atualizar o objeto manga diretamente
+                    Object.assign(manga, details);
+                    return manga;
+                }
+                return null;
+            })
+        );
+        
+        // Contar sucessos
+        const updated = results.filter(r => r.status === 'fulfilled' && r.value).length;
+        if (updated > 0) {
+            console.log(`✅ ${updated} detalhes atualizados`);
+            // Notificar que detalhes foram atualizados
+            onDetailsUpdated?.();
+        }
+        
+        // Pausa entre batches
+        if (detailsQueue.length > 0) {
+            await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
+        }
+    }
+    
+    isProcessingDetails = false;
+    console.log('📋 Fila de detalhes processada');
+}
+
+/**
+ * Agenda busca de detalhes para as obras de uma página
+ * @param {number} pageNumber - Número da página
+ */
+export function scheduleDetailsForPage(pageNumber) {
+    const pageData = state.loadedPages.get(pageNumber);
+    if (!pageData) return;
+    
+    // Adicionar obras que ainda não têm detalhes
+    for (const manga of pageData) {
+        const cacheKey = manga.url || manga.id;
+        // Só adicionar se não está no cache e não está na fila
+        if (!detailsCache.has(cacheKey) && manga.author === 'N/A') {
+            if (!detailsQueue.includes(manga)) {
+                detailsQueue.push(manga);
+            }
+        }
+    }
+    
+    // Iniciar processamento se não está rodando
+    processDetailsQueue();
+}
+
+/**
+ * Busca detalhes para todas as páginas carregadas atualmente
+ */
+export function scheduleDetailsForLoadedPages() {
+    for (const pageNumber of state.loadedPages.keys()) {
+        scheduleDetailsForPage(pageNumber);
+    }
+}
+
+/**
+ * Limpa cache de detalhes
+ */
+export function clearDetailsCache() {
+    detailsCache.clear();
+    detailsQueue = [];
+}

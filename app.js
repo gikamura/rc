@@ -21,7 +21,6 @@ window.GIKAMURA_DEBUG = localStorage.getItem('gikamura_debug') === 'true';
 // LAZY_LOADING_ENABLED: true = usa PageManager com sliding window
 // LAZY_LOADING_ENABLED: false = comportamento anterior (carrega tudo)
 const LAZY_LOADING_ENABLED = localStorage.getItem('gikamura_lazy_loading') !== 'false'; // Default: true
-console.log('🔧 LAZY_LOADING_ENABLED:', LAZY_LOADING_ENABLED, '(localStorage:', localStorage.getItem('gikamura_lazy_loading'), ')');
 
 // Helper para alternar lazy loading
 window.toggleLazyLoading = () => {
@@ -685,6 +684,14 @@ async function initializeAppWithLazyLoading(dom) {
         store.setCatalogMetadata(metadata);
         console.log('📊 Metadata setado no store:', metadata);
         
+        // Configurar callback para quando detalhes são atualizados
+        PageManager.setOnDetailsUpdated(() => {
+            // Re-renderizar apenas se não estiver em loading
+            if (!store.getState().isPageLoading) {
+                renderApp();
+            }
+        });
+        
         // Carregar primeira página
         await PageManager.goToPage(1);
         const firstPageData = PageManager.getPageData(1);
@@ -693,6 +700,9 @@ async function initializeAppWithLazyLoading(dom) {
         // Setar obras no store (apenas da página 1)
         store.setAllManga(firstPageData);
         store.setLoading(false);
+        
+        // Agendar busca de detalhes para páginas carregadas
+        PageManager.scheduleDetailsForLoadedPages();
         
         // Atualizar subtítulo com total do metadata (não só o que está carregado)
         dom.subtitle.textContent = `${metadata.totalMangas} obras no catálogo`;
@@ -906,6 +916,9 @@ async function handleLazyPageChange(pageNumber) {
         store.setAllManga(pageData);
     }
     
+    // Agendar busca de detalhes para a nova página
+    PageManager.scheduleDetailsForPage(pageNumber);
+    
     // Log de memória
     const stats = PageManager.getMemoryStats();
     debugLog('Lazy page change complete', { 
@@ -949,9 +962,7 @@ async function initializeApp() {
     // ============================================
     // LAZY LOADING: Novo fluxo de inicialização
     // ============================================
-    console.log('🔍 Verificando lazy loading...', { LAZY_LOADING_ENABLED });
     if (LAZY_LOADING_ENABLED) {
-        console.log('📖 Tentando inicialização com lazy loading');
         debugLog('Tentando inicialização com lazy loading');
         
         const lazySuccess = await initializeAppWithLazyLoading(dom);

@@ -196,6 +196,26 @@ export function showNotification(message, duration = 4000) {
     }, duration);
 }
 
+// Cache de contagens para não recalcular a cada render
+let cachedTypeCounts = null;
+
+/**
+ * Atualiza os botões de filtro (apenas estado ativo)
+ */
+function updateFilterButtons(state) {
+    const dom = getDOM();
+    
+    // Atualizar botões de tipo - apenas marcar ativo
+    dom.typeFilterContainer.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.type === state.activeTypeFilter);
+    });
+    
+    // Atualizar botões de status - apenas marcar ativo
+    dom.statusFilterContainer.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.status === state.activeStatusFilter);
+    });
+}
+
 let popupQueue = [];
 let isShowingPopup = false;
 
@@ -774,8 +794,8 @@ export function renderApp() {
     dom.paginationControls.classList.toggle('hidden', isUpdatesActive || isScansActive); // MODIFICADO
 
     if (isLibraryActive) {
-        dom.typeFilterContainer.querySelectorAll('.filter-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.type === state.activeTypeFilter));
-        dom.statusFilterContainer.querySelectorAll('.filter-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.status === state.activeStatusFilter));
+        // Atualizar filtros com contagens do lightIndex/allManga
+        updateFilterButtons(state);
     } else if (isUpdatesActive) {
         renderUpdatesTab(state);
     } else if (isScansActive) { // NOVO BLOCO LÓGICO
@@ -803,12 +823,11 @@ export function renderApp() {
         && state.activeTypeFilter === 'all' 
         && state.activeStatusFilter === 'all';
     
-    console.log('🎯 renderApp - isLazyLoadingMode:', isLazyLoadingMode, {
-        totalMangas: state.catalogMetadata?.totalMangas,
-        searchQuery: state.searchQuery,
-        typeFilter: state.activeTypeFilter,
-        statusFilter: state.activeStatusFilter
-    });
+    // Verificar se estamos em modo lazy com filtros ativos
+    // Nesse caso, precisamos filtrar do lightIndex
+    const isLazyWithFilters = state.catalogMetadata?.totalMangas > 0 
+        && state.lightIndex?.length > 0
+        && (state.activeTypeFilter !== 'all' || state.activeStatusFilter !== 'all' || state.searchQuery);
 
     switch (state.activeTab) {
         case 'home':
@@ -824,10 +843,59 @@ export function renderApp() {
             }
             break;
         case 'library':
-            // LAZY LOADING MODE: dados já vêm paginados do PageManager
+            // LAZY LOADING MODE (sem filtros): dados já vêm paginados do PageManager
             if (isLazyLoadingMode) {
                 totalPaginationItems = state.catalogMetadata.totalMangas;
                 itemsToDisplay = state.allManga; // Já contém apenas os dados da página atual
+            } else if (isLazyWithFilters) {
+                // LAZY COM FILTROS: filtrar do lightIndex completo
+                let filteredFromLight = [];
+                const sourceData = state.lightIndex;
+                
+                // Aplicar filtros
+                for (let i = 0; i < sourceData.length; i++) {
+                    const m = sourceData[i];
+                    if (state.activeTypeFilter !== 'all' && m.type !== state.activeTypeFilter) continue;
+                    // Light index não tem status detalhado, pular filtro de status no lazy mode
+                    // (status só está disponível após fetch dos detalhes)
+                    filteredFromLight.push(m);
+                }
+                
+                // Se há busca, filtrar por título
+                if (state.searchQuery && state.searchQuery.length >= 2) {
+                    const searchTerm = state.searchQuery.toLowerCase();
+                    filteredFromLight = filteredFromLight.filter(m => 
+                        (m.title || '').toLowerCase().includes(searchTerm)
+                    );
+                    // Ordenar: títulos que começam com o termo primeiro
+                    filteredFromLight.sort((a, b) => {
+                        const aTitle = (a.title || '').toLowerCase();
+                        const bTitle = (b.title || '').toLowerCase();
+                        const aStarts = aTitle.startsWith(searchTerm);
+                        const bStarts = bTitle.startsWith(searchTerm);
+                        if (aStarts && !bStarts) return -1;
+                        if (!aStarts && bStarts) return 1;
+                        return aTitle.localeCompare(bTitle);
+                    });
+                } else {
+                    // Ordenar por título
+                    filteredFromLight.sort((a, b) => 
+                        (a.title || '').localeCompare(b.title || '', undefined, { numeric: true, sensitivity: 'base' })
+                    );
+                }
+                
+                totalPaginationItems = filteredFromLight.length;
+                // Paginar e adicionar campos necessários para renderização
+                const pageStart = (state.currentPage - 1) * ITEMS_PER_PAGE;
+                itemsToDisplay = filteredFromLight.slice(pageStart, pageStart + ITEMS_PER_PAGE).map(m => ({
+                    ...m,
+                    imageUrl: m.cover_url || '',
+                    status: 'unknown',
+                    author: 'N/A',
+                    artist: 'N/A',
+                    description: '',
+                    chapterCount: 0
+                }));
             } else {
                 // MODO TRADICIONAL: filtrar e paginar localmente
                 let filteredLibrary = [];
