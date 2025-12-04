@@ -21,6 +21,7 @@ window.GIKAMURA_DEBUG = localStorage.getItem('gikamura_debug') === 'true';
 // LAZY_LOADING_ENABLED: true = usa PageManager com sliding window
 // LAZY_LOADING_ENABLED: false = comportamento anterior (carrega tudo)
 const LAZY_LOADING_ENABLED = localStorage.getItem('gikamura_lazy_loading') !== 'false'; // Default: true
+console.log('🔧 LAZY_LOADING_ENABLED:', LAZY_LOADING_ENABLED, '(localStorage:', localStorage.getItem('gikamura_lazy_loading'), ')');
 
 // Helper para alternar lazy loading
 window.toggleLazyLoading = () => {
@@ -948,7 +949,9 @@ async function initializeApp() {
     // ============================================
     // LAZY LOADING: Novo fluxo de inicialização
     // ============================================
+    console.log('🔍 Verificando lazy loading...', { LAZY_LOADING_ENABLED });
     if (LAZY_LOADING_ENABLED) {
+        console.log('📖 Tentando inicialização com lazy loading');
         debugLog('Tentando inicialização com lazy loading');
         
         const lazySuccess = await initializeAppWithLazyLoading(dom);
